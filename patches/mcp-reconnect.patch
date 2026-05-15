@@ -1,5 +1,5 @@
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
-index 09fcfc7..27979cb 100644
+index 832811b..2a20cc8 100644
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
 @@ -1,4 +1,4 @@
@@ -8,9 +8,9 @@ index 09fcfc7..27979cb 100644
  import { Client } from "@modelcontextprotocol/sdk/client/index.js"
  import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
  import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
-@@ -129,6 +129,24 @@ function isMcpConfigured(entry: McpEntry): entry is ConfigMCP.Info {
- 
- const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
+@@ -150,6 +150,24 @@ function listTools(key: string, client: MCPClient, timeout: number) {
+   )
+ }
  
 +/**
 + * Detect transport-level errors that indicate a stale MCP session.
@@ -33,7 +33,7 @@ index 09fcfc7..27979cb 100644
  // Convert MCP tool definition to AI SDK Tool type
  function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
    const inputSchema = mcpTool.inputSchema
-@@ -642,6 +660,8 @@ export const layer = Layer.effect(
+@@ -666,6 +684,8 @@ export const layer = Layer.effect(
          ([clientName]) => s.status[clientName]?.status === "connected",
        )
  
@@ -42,7 +42,7 @@ index 09fcfc7..27979cb 100644
        yield* Effect.forEach(
          connectedClients,
          ([clientName, client]) =>
-@@ -657,7 +677,63 @@ export const layer = Layer.effect(
+@@ -681,7 +701,63 @@ export const layer = Layer.effect(
  
              const timeout = entry?.timeout ?? defaultTimeout
              for (const mcpTool of listed) {
