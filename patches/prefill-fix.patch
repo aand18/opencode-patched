@@ -1,489 +1,214 @@
-diff --git a/packages/opencode/src/server/routes/instance/session.ts b/packages/opencode/src/server/routes/instance/session.ts
-index 52a803467..efc749681 100644
---- a/packages/opencode/src/server/routes/instance/session.ts
-+++ b/packages/opencode/src/server/routes/instance/session.ts
-@@ -27,6 +27,25 @@ import { zodObject } from "@/util/effect-zod"
- import { Bus } from "@/bus"
- import { NamedError } from "@opencode-ai/core/util/error"
- import { jsonRequest, runRequest } from "./trace"
-+import { Instance } from "@/project/instance"
-+import { InstanceBootstrap } from "@/project/bootstrap"
-+import { AppRuntime } from "@/effect/app-runtime"
-+
-+async function withSessionInstance<R>(sessionID: string, fn: () => Promise<R>): Promise<R> {
-+  const directory = await AppRuntime.runPromise(
-+    Effect.gen(function* () {
-+      const session = yield* Session.Service
-+      const info = yield* session.get(sessionID as SessionID)
-+      return info.directory
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts b/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts
+index d491369..9ef2be4 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts
+@@ -26,8 +26,18 @@ function provideInstanceContext<E>(
+ ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext> {
+   return Effect.gen(function* () {
+     const route = yield* WorkspaceRouteContext
++    // Prefer the session's stored directory (canonical filesystem path, never URL-
++    // encoded) over the request-supplied route directory. Closes the multi-cwd race
++    // where concurrent prompt_async requests for the same session arriving with
++    // different x-opencode-directory headers would bind to different per-directory
++    // Instances and bypass the per-session busy guard. Note: only route.directory
++    // needs decode() because it may have come from a URL-encoded query/header;
++    // route.sessionDirectory is the canonical row value and must NOT be decoded
++    // again. See opencode-patched/docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md
++    // for the v1.15.0 redesign rationale.
++    const directory = route.sessionDirectory ?? decode(route.directory)
+     return yield* store.provide(
+-      { directory: decode(route.directory) },
++      { directory },
+       effect.pipe(Effect.provideService(WorkspaceRef, route.workspaceID)),
+     )
+   })
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts b/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
+index 1d665fd..89660bd 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
+@@ -28,9 +28,14 @@ export const WorkspaceRoutingQuery = Schema.Struct(WorkspaceRoutingQueryFields)
+ 
+ type RemoteTarget = Extract<Target, { type: "remote" }>
+ 
+-type RequestPlan = Data.TaggedEnum<{
++/** @internal exported for tests; not part of the stable public surface. */
++export type RequestPlan = Data.TaggedEnum<{
+   MissingWorkspace: { readonly workspaceID: WorkspaceID }
+-  Local: { readonly directory: string; readonly workspaceID?: WorkspaceID }
++  Local: {
++    readonly directory: string
++    readonly workspaceID?: WorkspaceID
++    readonly sessionDirectory?: string
++  }
+   Remote: {
+     readonly request: HttpServerRequest.HttpServerRequest
+     readonly workspace: Workspace.Info
+@@ -45,6 +50,15 @@ export class WorkspaceRouteContext extends Context.Service<
+   {
+     readonly directory: string
+     readonly workspaceID?: WorkspaceID
++    // Present when the URL identifies an existing session.
++    // InstanceContextMiddleware should prefer this for local Instance binding,
++    // because the session row has a canonical directory that the request header
++    // may not match (e.g. a client in /B sending prompt_async to a session
++    // stored under /A). Without this, concurrent cross-cwd requests bind to
++    // different Instances and bypass the per-session busy guard, which produces
++    // interleaved tool_use/text in the persisted log and unrecoverable
++    // Anthropic 400 "assistant message prefill" errors on replay.
++    readonly sessionDirectory?: string
+   }
+ >()("@opencode/ExperimentalHttpApiWorkspaceRouteContext") {}
+ 
+@@ -144,14 +158,15 @@ function planWorkspaceRequest(
+   })
+ }
+ 
+-function planRequest(
++/** @internal exported for tests; not part of the stable public surface. */
++export function planRequest(
+   request: HttpServerRequest.HttpServerRequest,
+-  sessionWorkspaceID?: WorkspaceID,
++  session?: { directory?: string; workspaceID?: WorkspaceID },
+ ): Effect.Effect<RequestPlan, never, Workspace.Service> {
+   return Effect.gen(function* () {
+     const url = requestURL(request)
+     const envWorkspaceID = configuredWorkspaceID()
+-    const workspaceID = selectedWorkspaceID(url, sessionWorkspaceID)
++    const workspaceID = selectedWorkspaceID(url, session?.workspaceID)
+     const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
+ 
+     if (workspaceID && workspace === undefined && !envWorkspaceID) {
+@@ -162,7 +177,11 @@ function planRequest(
+       return yield* planWorkspaceRequest(request, url, workspace)
+     }
+ 
+-    return RequestPlan.Local({ directory: defaultDirectory(request, url), workspaceID: envWorkspaceID ?? workspaceID })
++    return RequestPlan.Local({
++      directory: defaultDirectory(request, url),
++      workspaceID: envWorkspaceID ?? workspaceID,
++      sessionDirectory: session?.directory,
 +    })
-+  )
-+  return Instance.provide({
-+    directory,
-+    init: () => AppRuntime.runPromise(InstanceBootstrap),
-+    fn
-+  })
-+}
+   })
+ }
+ 
+@@ -174,8 +193,13 @@ function routeWorkspace<E>(
+   return RequestPlan.$match(plan, {
+     MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
+     Remote: ({ request, workspace, target, url }) => proxyRemote(client, request, workspace, target, url),
+-    Local: ({ directory, workspaceID }) =>
+-      effect.pipe(Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID }))),
++    Local: ({ directory, workspaceID, sessionDirectory }) =>
++      effect.pipe(
++        Effect.provideService(
++          WorkspaceRouteContext,
++          WorkspaceRouteContext.of({ directory, workspaceID, sessionDirectory }),
++        ),
++      ),
+   })
+ }
+ 
+@@ -196,7 +220,7 @@ function routeHttpApiWorkspace<E>(
+           Effect.catchDefect(() => Effect.succeed(undefined)),
+         )
+       : undefined
+-    const plan = yield* planRequest(request, session?.workspaceID)
++    const plan = yield* planRequest(request, session)
+     return yield* routeWorkspace(client, effect, plan)
+   })
+ }
+diff --git a/packages/opencode/test/server/httpapi-workspace-routing.test.ts b/packages/opencode/test/server/httpapi-workspace-routing.test.ts
+index 9d6dc8c..7a238fd 100644
+--- a/packages/opencode/test/server/httpapi-workspace-routing.test.ts
++++ b/packages/opencode/test/server/httpapi-workspace-routing.test.ts
+@@ -22,6 +22,7 @@ import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
+ import { Project } from "../../src/project/project"
+ import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/workspace"
+ import {
++  planRequest,
+   WorkspaceRouteContext,
+   workspaceRouterMiddleware,
+ } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
+@@ -527,3 +528,83 @@ describe("HttpApi workspace routing middleware", () => {
+     }),
+   )
+ })
 +
- 
- const log = Log.create({ service: "server" })
- 
-@@ -127,11 +146,15 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const sessionID = c.req.valid("param").sessionID
-         return jsonRequest("SessionRoutes.get", c, function* () {
-           const session = yield* Session.Service
-           return yield* session.get(sessionID)
-         })
-+      
-+        })
-       },
-     )
-     .get(
-@@ -160,11 +183,15 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const sessionID = c.req.valid("param").sessionID
-         return jsonRequest("SessionRoutes.children", c, function* () {
-           const session = yield* Session.Service
-           return yield* session.children(sessionID)
-         })
-+      
-+        })
-       },
-     )
-     .get(
-@@ -192,11 +219,15 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const sessionID = c.req.valid("param").sessionID
-         return jsonRequest("SessionRoutes.todo", c, function* () {
-           const todo = yield* Todo.Service
-           return yield* todo.get(sessionID)
-         })
-+      
-+        })
-       },
-     )
-     .post(
-@@ -249,13 +280,15 @@ export const SessionRoutes = lazy(() =>
-           sessionID: Session.RemoveInput.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.delete", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.delete", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const svc = yield* Session.Service
-           yield* svc.remove(sessionID)
-           return true
--        }),
-+        }))
-+      },
-     )
-     .patch(
-       "/:sessionID",
-@@ -293,8 +326,9 @@ export const SessionRoutes = lazy(() =>
-             .optional(),
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.update", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.update", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const updates = c.req.valid("json")
-           const session = yield* Session.Service
-@@ -314,7 +348,8 @@ export const SessionRoutes = lazy(() =>
-           }
- 
-           return yield* session.get(sessionID)
--        }),
-+        }))
-+      },
-     )
-     // TODO(v2): remove this dedicated route and rely on the normal `/init` command flow.
-     .post(
-@@ -350,8 +385,9 @@ export const SessionRoutes = lazy(() =>
-           messageID: MessageID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.init", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.init", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const body = c.req.valid("json")
-           const svc = yield* SessionPrompt.Service
-@@ -363,7 +399,8 @@ export const SessionRoutes = lazy(() =>
-             arguments: "",
-           })
-           return true
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/fork",
-@@ -389,13 +426,15 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       validator("json", zodObject(Session.ForkInput).omit({ sessionID: true })),
--      async (c) =>
--        jsonRequest("SessionRoutes.fork", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.fork", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const body = c.req.valid("json") as { messageID?: MessageID }
-           const svc = yield* Session.Service
-           return yield* svc.fork({ ...body, sessionID })
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/abort",
-@@ -421,12 +460,14 @@ export const SessionRoutes = lazy(() =>
-           sessionID: SessionID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.abort", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.abort", c, function* () {
-           const svc = yield* SessionPrompt.Service
-           yield* svc.cancel(c.req.valid("param").sessionID)
-           return true
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/share",
-@@ -452,14 +493,16 @@ export const SessionRoutes = lazy(() =>
-           sessionID: SessionID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.share", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.share", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const share = yield* SessionShare.Service
-           const session = yield* Session.Service
-           yield* share.share(sessionID)
-           return yield* session.get(sessionID)
--        }),
-+        }))
-+      },
-     )
-     .get(
-       "/:sessionID/diff",
-@@ -485,8 +528,9 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       validator("query", zodObject(SessionSummary.DiffInput).omit({ sessionID: true })),
--      async (c) =>
--        jsonRequest("SessionRoutes.diff", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.diff", c, function* () {
-           const query = c.req.valid("query") as Omit<SessionSummary.DiffInput, "sessionID">
-           const params = c.req.valid("param")
-           const summary = yield* SessionSummary.Service
-@@ -494,7 +538,8 @@ export const SessionRoutes = lazy(() =>
-             sessionID: params.sessionID,
-             messageID: query.messageID,
-           })
--        }),
-+        }))
-+      },
-     )
-     .delete(
-       "/:sessionID/share",
-@@ -520,14 +565,16 @@ export const SessionRoutes = lazy(() =>
-           sessionID: SessionID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.unshare", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.unshare", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const share = yield* SessionShare.Service
-           const session = yield* Session.Service
-           yield* share.unshare(sessionID)
-           return yield* session.get(sessionID)
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/summarize",
-@@ -561,8 +608,9 @@ export const SessionRoutes = lazy(() =>
-           auto: z.boolean().optional().default(false),
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.summarize", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.summarize", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const body = c.req.valid("json")
-           const session = yield* Session.Service
-@@ -594,7 +642,8 @@ export const SessionRoutes = lazy(() =>
-           })
-           yield* prompt.loop({ sessionID })
-           return true
--        }),
-+        }))
-+      },
-     )
-     .get(
-       "/:sessionID/message",
-@@ -653,6 +702,8 @@ export const SessionRoutes = lazy(() =>
-           }),
-       ),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const query = c.req.valid("query")
-         const sessionID = c.req.valid("param").sessionID
-         if (query.limit === undefined || query.limit === 0) {
-@@ -682,6 +733,8 @@ export const SessionRoutes = lazy(() =>
-           c.header("X-Next-Cursor", page.cursor)
-         }
-         return c.json(page.items)
-+      
-+        })
-       },
-     )
-     .get(
-@@ -715,12 +768,16 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const params = c.req.valid("param")
-         const message = await MessageV2.get({
-           sessionID: params.sessionID,
-           messageID: params.messageID,
-         })
-         return c.json(message)
-+      
-+        })
-       },
-     )
-     .delete(
-@@ -749,8 +806,9 @@ export const SessionRoutes = lazy(() =>
-           messageID: MessageID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.deleteMessage", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.deleteMessage", c, function* () {
-           const params = c.req.valid("param")
-           const state = yield* SessionRunState.Service
-           const session = yield* Session.Service
-@@ -760,7 +818,8 @@ export const SessionRoutes = lazy(() =>
-             messageID: params.messageID,
-           })
-           return true
--        }),
-+        }))
-+      },
-     )
-     .delete(
-       "/:sessionID/message/:messageID/part/:partID",
-@@ -787,8 +846,9 @@ export const SessionRoutes = lazy(() =>
-           partID: PartID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.deletePart", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.deletePart", c, function* () {
-           const params = c.req.valid("param")
-           const svc = yield* Session.Service
-           yield* svc.removePart({
-@@ -797,7 +857,8 @@ export const SessionRoutes = lazy(() =>
-             partID: params.partID,
-           })
-           return true
--        }),
-+        }))
-+      },
-     )
-     .patch(
-       "/:sessionID/message/:messageID/part/:partID",
-@@ -826,6 +887,8 @@ export const SessionRoutes = lazy(() =>
-       ),
-       validator("json", MessageV2.Part.zod),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const params = c.req.valid("param")
-         const body = c.req.valid("json")
-         if (body.id !== params.partID || body.messageID !== params.messageID || body.sessionID !== params.sessionID) {
-@@ -837,6 +900,8 @@ export const SessionRoutes = lazy(() =>
-           const svc = yield* Session.Service
-           return yield* svc.updatePart(body)
-         })
-+      
-+        })
-       },
-     )
-     .post(
-@@ -870,6 +935,8 @@ export const SessionRoutes = lazy(() =>
-       ),
-       validator("json", zodObject(SessionPrompt.PromptInput).omit({ sessionID: true })),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         c.status(200)
-         c.header("Content-Type", "application/json")
-         return stream(c, async (stream) => {
-@@ -884,6 +951,8 @@ export const SessionRoutes = lazy(() =>
-           )
-           void stream.write(JSON.stringify(msg))
-         })
-+      
-+        })
-       },
-     )
-     .post(
-@@ -910,13 +979,14 @@ export const SessionRoutes = lazy(() =>
-       async (c) => {
-         const sessionID = c.req.valid("param").sessionID
-         const body = c.req.valid("json")
--        void runRequest(
-+        void withSessionInstance(sessionID, async () =>
-+          runRequest(
-           "SessionRoutes.prompt_async",
-           c,
-           SessionPrompt.Service.use((svc) =>
-             svc.prompt({ ...body, sessionID } as unknown as SessionPrompt.PromptInput),
-           ),
--        ).catch((err) => {
-+        )).catch((err) => {
-           log.error("prompt_async failed", { sessionID, error: err })
-           void Bus.publish(Session.Event.Error, {
-             sessionID,
-@@ -957,13 +1027,15 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       validator("json", zodObject(SessionPrompt.CommandInput).omit({ sessionID: true })),
--      async (c) =>
--        jsonRequest("SessionRoutes.command", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.command", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const body = c.req.valid("json") as Omit<SessionPrompt.CommandInput, "sessionID">
-           const svc = yield* SessionPrompt.Service
-           return yield* svc.command({ ...body, sessionID })
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/shell",
-@@ -990,13 +1062,15 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       validator("json", zodObject(SessionPrompt.ShellInput).omit({ sessionID: true })),
--      async (c) =>
--        jsonRequest("SessionRoutes.shell", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.shell", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const body = c.req.valid("json") as Omit<SessionPrompt.ShellInput, "sessionID">
-           const svc = yield* SessionPrompt.Service
-           return yield* svc.shell({ ...body, sessionID })
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/revert",
-@@ -1024,6 +1098,8 @@ export const SessionRoutes = lazy(() =>
-       ),
-       validator("json", zodObject(SessionRevert.RevertInput).omit({ sessionID: true })),
-       async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => {
-         const sessionID = c.req.valid("param").sessionID
-         const body = c.req.valid("json") as Omit<SessionRevert.RevertInput, "sessionID">
-         log.info("revert", body)
-@@ -1031,6 +1107,8 @@ export const SessionRoutes = lazy(() =>
-           const svc = yield* SessionRevert.Service
-           return yield* svc.revert({ sessionID, ...body })
-         })
-+      
-+        })
-       },
-     )
-     .post(
-@@ -1057,12 +1135,14 @@ export const SessionRoutes = lazy(() =>
-           sessionID: SessionID.zod,
-         }),
-       ),
--      async (c) =>
--        jsonRequest("SessionRoutes.unrevert", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.unrevert", c, function* () {
-           const sessionID = c.req.valid("param").sessionID
-           const svc = yield* SessionRevert.Service
-           return yield* svc.unrevert({ sessionID })
--        }),
-+        }))
-+      },
-     )
-     .post(
-       "/:sessionID/permissions/:permissionID",
-@@ -1091,8 +1171,9 @@ export const SessionRoutes = lazy(() =>
-         }),
-       ),
-       validator("json", z.object({ response: Permission.Reply.zod })),
--      async (c) =>
--        jsonRequest("SessionRoutes.permissionRespond", c, function* () {
-+      async (c) => {
-+        const sessionID = (c.req.valid("param") as any).sessionID as string
-+        return withSessionInstance(sessionID, async () => jsonRequest("SessionRoutes.permissionRespond", c, function* () {
-           const params = c.req.valid("param")
-           const svc = yield* Permission.Service
-           yield* svc.reply({
-@@ -1100,6 +1181,7 @@ export const SessionRoutes = lazy(() =>
-             reply: c.req.valid("json").response,
-           })
-           return true
--        }),
-+        }))
-+      },
-     ),
- )
++// Unit tests for `planRequest` itself, focused on the session.directory →
++// sessionDirectory threading that closes the multi-cwd race.
++//
++// Background: in v1.15.0 the new WorkspaceRoutingMiddleware does
++// `Session.Service.get(sessionID)` for /session/<id>/... routes, but until our
++// patch it only forwarded `session.workspaceID` into planRequest, dropping
++// `session.directory`. For sessions WITHOUT a workspace, the middleware then
++// fell through to defaultDirectory(request, url) — i.e. the x-opencode-directory
++// header — and concurrent requests to the same session from different cwds
++// bound to different per-directory Instances, bypassing the per-session busy
++// guard and producing interleaved tool_use/text in the assistant log
++// (unrecoverable Anthropic 400 "assistant message prefill" on replay).
++//
++// These tests assert the data flow that closes that race: when a session pick
++// is supplied, its `directory` field must surface as `RequestPlan.Local.sessionDirectory`,
++// while `defaultDirectory` (header/query) must continue to populate the
++// fallback `directory` for non-session-scoped routes.
++//
++// See opencode-patched/docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md
++// for the full root cause and the v1.15.0 redesign rationale.
++describe("planRequest session.directory threading", () => {
++  it.live("Local plan carries session.directory as sessionDirectory", () =>
++    Effect.gen(function* () {
++      const request = HttpServerRequest.fromWeb(
++        new Request("http://localhost/session/ses_test/prompt_async", {
++          method: "POST",
++          headers: { "x-opencode-directory": "/header-cwd" },
++        }),
++      )
++
++      const plan = yield* planRequest(request, { directory: "/session-cwd" })
++
++      expect(plan._tag).toBe("Local")
++      if (plan._tag !== "Local") return
++      // Header still populates the legacy `directory` field for back-compat
++      // (e.g. used by routes like /session create that should follow the
++      // request's cwd, not any session row).
++      expect(plan.directory).toBe("/header-cwd")
++      // The session's stored directory is now threaded through so
++      // InstanceContextMiddleware can prefer it for Instance binding.
++      expect(plan.sessionDirectory).toBe("/session-cwd")
++    }),
++  )
++
++  it.live("Local plan omits sessionDirectory when no session is supplied", () =>
++    Effect.gen(function* () {
++      const request = HttpServerRequest.fromWeb(
++        new Request("http://localhost/session?roots=true", {
++          method: "GET",
++          headers: { "x-opencode-directory": "/header-cwd" },
++        }),
++      )
++
++      const plan = yield* planRequest(request)
++
++      expect(plan._tag).toBe("Local")
++      if (plan._tag !== "Local") return
++      expect(plan.directory).toBe("/header-cwd")
++      expect(plan.sessionDirectory).toBeUndefined()
++    }),
++  )
++
++  it.live("Local plan omits sessionDirectory when session pick has no directory", () =>
++    Effect.gen(function* () {
++      const request = HttpServerRequest.fromWeb(
++        new Request("http://localhost/session/ses_test", {
++          headers: { "x-opencode-directory": "/header-cwd" },
++        }),
++      )
++
++      const plan = yield* planRequest(request, { workspaceID: undefined })
++
++      expect(plan._tag).toBe("Local")
++      if (plan._tag !== "Local") return
++      expect(plan.directory).toBe("/header-cwd")
++      expect(plan.sessionDirectory).toBeUndefined()
++    }),
++  )
++})
