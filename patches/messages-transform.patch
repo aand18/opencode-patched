@@ -1,5 +1,5 @@
---- packages/opencode/src/session/prompt.ts
-+++ packages/opencode/src/session/prompt.ts
+--- a/packages/opencode/src/session/prompt.ts
++++ b/packages/opencode/src/session/prompt.ts
 @@ -1439,7 +1439,7 @@
                }
              }
@@ -9,8 +9,8 @@
  
              const [skills, env, instructions, modelMsgs] = yield* Effect.all([
                sys.skills(agent),
---- packages/plugin/src/index.ts
-+++ packages/plugin/src/index.ts
+--- a/packages/plugin/src/index.ts
++++ b/packages/plugin/src/index.ts
 @@ -279,7 +279,7 @@
      },
    ) => Promise<void>
