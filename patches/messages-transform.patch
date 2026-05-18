@@ -1,0 +1,22 @@
+--- packages/opencode/src/session/prompt.ts
++++ packages/opencode/src/session/prompt.ts
+@@ -1439,7 +1439,7 @@
+               }
+             }
+ 
+-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
++            yield* plugin.trigger("experimental.chat.messages.transform", { sessionID: session.id, model }, { messages: msgs })
+ 
+             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+               sys.skills(agent),
+--- packages/plugin/src/index.ts
++++ packages/plugin/src/index.ts
+@@ -279,7 +279,7 @@
+     },
+   ) => Promise<void>
+   "experimental.chat.messages.transform"?: (
+-    input: {},
++    input: { sessionID?: string; model: Model },
+     output: {
+       messages: {
+         info: Message

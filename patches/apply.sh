@@ -22,6 +22,7 @@ TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
 EAGER_INPUT_STREAMING_PATCH="$SCRIPT_DIR/eager-input-streaming.patch"
 PREFILL_FIX_PATCH="$SCRIPT_DIR/prefill-fix.patch"
+MESSAGES_TRANSFORM_PATCH="$SCRIPT_DIR/messages-transform.patch"
 CACHING_PATCH_URL="https://raw.githubusercontent.com/johnnymo87/opencode-cached/main/patches/caching.patch"
 
 if [ ! -d "$SOURCE_DIR" ]; then
@@ -51,6 +52,11 @@ fi
 
 if [ ! -f "$PREFILL_FIX_PATCH" ]; then
   echo "Error: Prefill fix patch not found: $PREFILL_FIX_PATCH"
+  exit 1
+fi
+
+if [ ! -f "$MESSAGES_TRANSFORM_PATCH" ]; then
+  echo "Error: Messages transform patch not found: $MESSAGES_TRANSFORM_PATCH"
   exit 1
 fi
 
@@ -195,6 +201,24 @@ fi
 
 git apply "$PREFILL_FIX_PATCH"
 echo "✓ Prefill fix patch applied"
+
+# --- Patch 7: Pass sessionID/model to messages.transform (local) ---
+
+echo "Applying messages-transform.patch..."
+if ! git apply --check "$MESSAGES_TRANSFORM_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ MESSAGES TRANSFORM PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$MESSAGES_TRANSFORM_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  exit 1
+fi
+
+git apply "$MESSAGES_TRANSFORM_PATCH"
+echo "✓ Messages transform patch applied"
 
 # --- Summary ---
 
