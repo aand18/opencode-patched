@@ -304,6 +304,59 @@ For each PR, the workflow is:
 5. If full file moved/redesigned (like prefill-fix needed for v1.15.0):
    escalate to a real redesign and write a dedicated design doc.
 
+### Task 1 probe results (2026-05-18)
+
+Probed against a scratch clone of `anomalyco/opencode@v1.15.0`
+(`2662a4f release: v1.15.0`) with `caching.patch` pre-applied. Stack:
+`caching.patch → #25367 → #25100 → #27377`.
+
+| Step | PR / patch | Lines | Outcome | Detail |
+|------|-----------|-------|---------|--------|
+| 1.2 | `caching.patch` | 2526 | **A — clean** | All 6 files applied with no rejects |
+| 1.3 | PR #25367 (prompt-loop-cache, 73 lines) | 73 | **A — clean** | Applied against caching state; no rejects |
+| 1.4 | PR #25100 (cache-aligned-compaction, 410 lines) | 410 | **B — 2 rejects** | Applied after #25367; see below |
+| 1.5 | PR #27377 (system-prompt-split, 675 lines) | 675 | **B — 2 rejects** | Probed on caching+#25367 only; see below |
+
+**PR #25100 reject details (needs anchor refresh in Task 3):**
+
+1. `packages/opencode/src/session/compaction.ts` hunk @line 18:
+   The patch context expects `import { fn } from "@/util/fn"` between
+   `makeRuntime` and `const log = Log.create(...)`. In v1.15.0, `fn` is
+   not imported from compaction.ts; instead there are several new imports
+   (`serviceUse`, `RuntimeFlags`, `EventV2`, `EventV2Bridge`, `SessionEvent`).
+   Fix: update the context anchor to match v1.15.0's import block (add the
+   new `import { type Tool as AITool } from "ai"` after `makeRuntime`
+   without relying on the removed `fn` import as context).
+
+2. `packages/opencode/src/session/prompt.ts` hunk @line 1341:
+   The patch context expects the compaction task block to end with
+   `if (result === "stop") break\n  continue`, but PR #25367 (applied
+   before this) inserted `needsFullReload = true` before `continue`.
+   Fix: update context to include `needsFullReload = true` between
+   the `break` and `continue` lines.
+
+   The semantic changes from #25100 (computing `resolved` context before
+   `compaction.process()` and passing it as a parameter) do not conflict
+   with #25367's `needsFullReload = true` — they can coexist.
+
+**PR #27377 reject details (needs anchor refresh in Task 4; also note: probed
+without #25100 applied since that patch failed):**
+
+1. `packages/core/src/flag/flag.ts` hunk @line 73:
+   The patch context expects `OPENCODE_EXPERIMENTAL_MARKDOWN:
+   !falsy("OPENCODE_EXPERIMENTAL_MARKDOWN"),` between `SCOUT` and
+   `ENABLE_PARALLEL`. In v1.15.0, `OPENCODE_EXPERIMENTAL_MARKDOWN` is
+   absent from `flag.ts`. Fix: update context to skip that line.
+
+2. `packages/opencode/src/skill/index.ts` hunk @line 12:
+   The patch context expects the import block to go directly
+   `ConfigMarkdown → Glob` with no intervening line. In v1.15.0, a
+   `import { RuntimeFlags } from "@/effect/runtime-flags"` line sits
+   between them. Fix: include `RuntimeFlags` in the context.
+
+**All outcomes are B (anchor refresh needed). No C-level failures.**
+No PR targets a file that was moved or deleted in v1.15.0.
+
 ## Flag rollout strategy
 
 `OPENCODE_EXPERIMENTAL_SYSTEM_PROMPT_SPLIT` and
