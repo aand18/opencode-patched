@@ -202,23 +202,30 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ inputs.version }}-patched
-          name: OpenCode v${{ inputs.version }} with Caching + Vim + Tool Fix + MCP Reconnect + Eager Input Streaming
+          name: OpenCode v${{ inputs.version }} with Caching + Local Patches
           body: |
-            # OpenCode v${{ inputs.version }} with Caching + Vim + Tool Fix + MCP Reconnect + Eager Input Streaming
+            # OpenCode v${{ inputs.version }} with Caching + Local Patches
 
-            This release applies five patches to OpenCode v${{ inputs.version }}:
+            This release applies eight patches to OpenCode v${{ inputs.version }}:
 
             1. **Prompt caching improvements** from [PR #5422](https://github.com/anomalyco/opencode/pull/5422) (via [opencode-cached](https://github.com/johnnymo87/opencode-cached))
-            2. **Vim keybindings** from [PR #12679](https://github.com/anomalyco/opencode/pull/12679)
-            3. **Tool use/result mismatch fix** from [PR #16751](https://github.com/anomalyco/opencode/pull/16751)
-            4. **MCP auto-reconnect** from [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
-            5. **Eager input streaming workaround** for [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- defaults `toolStreaming = false` for all `@ai-sdk/anthropic`-backed providers (Vertex Anthropic, Bedrock proxies, etc.)
+            2. **Prompt-loop byte identity** from [PR #25367](https://github.com/anomalyco/opencode/pull/25367)
+            3. **Cache-aligned compaction** from [PR #25100](https://github.com/anomalyco/opencode/pull/25100)
+            4. **Vim keybindings** from [PR #12679](https://github.com/anomalyco/opencode/pull/12679)
+            5. **Tool use/result mismatch fix** from [PR #16751](https://github.com/anomalyco/opencode/pull/16751)
+            6. **MCP auto-reconnect** from [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
+            7. **Eager input streaming workaround** for [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- defaults `toolStreaming = false` for all `@ai-sdk/anthropic`-backed providers (Vertex Anthropic, Bedrock proxies, etc.)
+            8. **Prefill race fix** for session-route workspace binding
 
             ## Caching Improvements
 
             - Provider-specific cache configuration for 19+ providers
             - Improved cache breakpoint logic with `maxBreakpoints` support
             - ~44% reduction in cache writes, ~73% reduction in effective cost
+
+            ## Prompt Cache Alignment
+
+            Prompt-loop byte identity preserves the conversation array across tool-call continuations, reducing cache misses from unchanged prompt tails. Cache-aligned compaction reuses normal prompt-loop context for compaction calls when provider/model conditions allow, so future compactions can reuse the same prefix cache.
 
             ## Vim Keybindings
 
@@ -273,10 +280,13 @@ jobs:
 
             **Upstream**: [anomalyco/opencode v${{ inputs.version }}](https://github.com/anomalyco/opencode/releases/tag/v${{ inputs.version }})
             **Caching patch**: [opencode-cached](https://github.com/johnnymo87/opencode-cached) / [PR #5422](https://github.com/anomalyco/opencode/pull/5422)
+            **Prompt-loop cache patch**: [PR #25367](https://github.com/anomalyco/opencode/pull/25367)
+            **Cache-aligned compaction patch**: [PR #25100](https://github.com/anomalyco/opencode/pull/25100)
             **Vim patch**: [PR #12679](https://github.com/anomalyco/opencode/pull/12679)
             **Tool fix patch**: [PR #16751](https://github.com/anomalyco/opencode/pull/16751)
             **MCP reconnect**: [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
             **Eager input streaming**: [Issue #23541](https://github.com/anomalyco/opencode/issues/23541)
+            **Prefill race fix**: local route binding patch
           files: |
             artifacts/opencode-linux-arm64.tar.gz
             artifacts/opencode-linux-x64.tar.gz
@@ -302,35 +312,49 @@ jobs:
             const body = `
             ## Build Failure: v${version}
 
-            The automated build for OpenCode v${version} with caching + vim + tool fix + mcp reconnect + eager-input-streaming patches failed.
+            The automated build for OpenCode v${version} with caching + local patches failed.
 
             **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
             ### Possible Causes
 
             1. **Caching patch conflict**: The caching patch (fetched from opencode-cached) may not apply to v${version}
-            2. **Vim patch conflict**: The local vim.patch may not apply to v${version}
-            3. **Tool fix patch conflict**: The local tool-fix.patch may not apply to v${version}
-            4. **MCP reconnect patch conflict**: The local mcp-reconnect.patch may not apply to v${version}
-            5. **Eager input streaming patch conflict**: The local eager-input-streaming.patch may not apply to v${version}
-            6. **Build failure**: OpenCode build process may have changed
+            2. **Prompt-loop cache patch conflict**: The local prompt-loop-cache.patch may not apply to v${version}
+            3. **Cache-aligned compaction patch conflict**: The local cache-aligned-compaction.patch may not apply to v${version}
+            4. **Vim patch conflict**: The local vim.patch may not apply to v${version}
+            5. **Tool fix patch conflict**: The local tool-fix.patch may not apply to v${version}
+            6. **MCP reconnect patch conflict**: The local mcp-reconnect.patch may not apply to v${version}
+            7. **Eager input streaming patch conflict**: The local eager-input-streaming.patch may not apply to v${version}
+            8. **Prefill fix patch conflict**: The local prefill-fix.patch may not apply to v${version}
+            9. **Build failure**: OpenCode build process may have changed
 
             ### Action Required
 
             1. Check the workflow logs above
             2. If caching patch failed, check [opencode-cached](https://github.com/johnnymo87/opencode-cached) for updates
-            3. If vim patch failed, regenerate from [PR #12679](https://github.com/anomalyco/opencode/pull/12679):
+            3. If prompt-loop cache patch failed, regenerate from [PR #25367](https://github.com/anomalyco/opencode/pull/25367):
+               \`\`\`bash
+               gh pr diff 25367 --repo anomalyco/opencode > patches/prompt-loop-cache.patch
+               # Review changes, commit and push
+               \`\`\`
+            4. If cache-aligned compaction patch failed, regenerate from [PR #25100](https://github.com/anomalyco/opencode/pull/25100):
+               \`\`\`bash
+               gh pr diff 25100 --repo anomalyco/opencode > patches/cache-aligned-compaction.patch
+               # Review changes, commit and push
+               \`\`\`
+            5. If vim patch failed, regenerate from [PR #12679](https://github.com/anomalyco/opencode/pull/12679):
                \`\`\`bash
                gh pr diff 12679 --repo anomalyco/opencode > patches/vim.patch
                # Review changes, filter if needed, commit and push
                \`\`\`
-            4. If tool fix patch failed, regenerate from [PR #16751](https://github.com/anomalyco/opencode/pull/16751):
+            6. If tool fix patch failed, regenerate from [PR #16751](https://github.com/anomalyco/opencode/pull/16751):
                \`\`\`bash
                gh pr diff 16751 --repo anomalyco/opencode > patches/tool-fix.patch
                # Review changes, commit and push
                \`\`\`
-            5. If MCP reconnect patch failed, review upstream changes to \`mcp/index.ts\` and update manually
-            6. Re-run: \`gh workflow run build-release.yml --field version=${version}\`
+            7. If MCP reconnect patch failed, review upstream changes to \`mcp/index.ts\` and update manually
+            8. If prefill fix patch failed, review upstream route/middleware changes and update manually
+            9. Re-run: \`gh workflow run build-release.yml --field version=${version}\`
             `;
 
             const issues = await github.rest.issues.listForRepo({
