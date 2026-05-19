@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Apply caching + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix
+# Apply caching + prompt-loop-cache + cache-aligned-compaction + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Fetches caching.patch from opencode-cached (never duplicated here),
-# then applies local vim.patch, tool-fix.patch, mcp-reconnect.patch,
-# eager-input-streaming.patch, and prefill-fix.patch on top.
+# then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, vim.patch, tool-fix.patch,
+# mcp-reconnect.patch, eager-input-streaming.patch, and prefill-fix.patch on top.
 
 set -euo pipefail
 
@@ -17,6 +17,8 @@ fi
 
 SOURCE_DIR="$1"
 SCRIPT_DIR="$(dirname "$0")"
+PROMPT_LOOP_CACHE_PATCH="$SCRIPT_DIR/prompt-loop-cache.patch"
+CACHE_ALIGNED_COMPACTION_PATCH="$SCRIPT_DIR/cache-aligned-compaction.patch"
 VIM_PATCH="$SCRIPT_DIR/vim.patch"
 TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
@@ -26,6 +28,16 @@ CACHING_PATCH_URL="https://raw.githubusercontent.com/johnnymo87/opencode-cached/
 
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
+  exit 1
+fi
+
+if [ ! -f "$PROMPT_LOOP_CACHE_PATCH" ]; then
+  echo "Error: Prompt-loop cache patch not found: $PROMPT_LOOP_CACHE_PATCH"
+  exit 1
+fi
+
+if [ ! -f "$CACHE_ALIGNED_COMPACTION_PATCH" ]; then
+  echo "Error: Cache aligned compaction patch not found: $CACHE_ALIGNED_COMPACTION_PATCH"
   exit 1
 fi
 
@@ -91,7 +103,49 @@ git apply "$CACHING_PATCH"
 echo "✓ Caching patch applied"
 rm -f "$CACHING_PATCH"
 
-# --- Patch 2: Vim keybindings (local) ---
+# --- Patch 2: Prompt-loop byte identity (PR #25367) ---
+
+echo "Applying prompt-loop-cache.patch..."
+if ! git apply --check "$PROMPT_LOOP_CACHE_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ PROMPT LOOP CACHE PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$PROMPT_LOOP_CACHE_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The prompt-loop-cache patch may need updating for this upstream version."
+  echo "Source PR: https://github.com/anomalyco/opencode/pull/25367"
+  exit 1
+fi
+
+git apply "$PROMPT_LOOP_CACHE_PATCH"
+echo "✓ Prompt-loop-cache patch applied"
+
+# --- Patch 3: Cache-aligned compaction (PR #25100) ---
+
+echo "Applying cache-aligned-compaction.patch..."
+if ! git apply --check "$CACHE_ALIGNED_COMPACTION_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ CACHE ALIGNED COMPACTION PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$CACHE_ALIGNED_COMPACTION_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The cache-aligned-compaction patch may need updating for this upstream version."
+  echo "Source PR: https://github.com/anomalyco/opencode/pull/25100"
+  exit 1
+fi
+
+git apply "$CACHE_ALIGNED_COMPACTION_PATCH"
+echo "✓ Cache-aligned compaction patch applied"
+
+# --- Patch 4: Vim keybindings (local) ---
 
 echo "Applying vim.patch..."
 if ! git apply --check "$VIM_PATCH" 2>/dev/null; then
@@ -112,7 +166,7 @@ fi
 git apply "$VIM_PATCH"
 echo "✓ Vim patch applied"
 
-# --- Patch 3: Tool use/result fix (local) ---
+# --- Patch 5: Tool use/result fix (local) ---
 
 echo "Applying tool-fix.patch..."
 if ! git apply --check "$TOOL_FIX_PATCH" 2>/dev/null; then
@@ -133,7 +187,7 @@ fi
 git apply "$TOOL_FIX_PATCH"
 echo "✓ Tool fix patch applied"
 
-# --- Patch 4: MCP auto-reconnect (local) ---
+# --- Patch 6: MCP auto-reconnect (local) ---
 
 echo "Applying mcp-reconnect.patch..."
 if ! git apply --check "$MCP_RECONNECT_PATCH" 2>/dev/null; then
@@ -154,7 +208,7 @@ fi
 git apply "$MCP_RECONNECT_PATCH"
 echo "✓ MCP reconnect patch applied"
 
-# --- Patch 5: Eager input streaming workaround (local) ---
+# --- Patch 7: Eager input streaming workaround (local) ---
 
 echo "Applying eager-input-streaming.patch..."
 if ! git apply --check "$EAGER_INPUT_STREAMING_PATCH" 2>/dev/null; then
@@ -175,7 +229,7 @@ fi
 git apply "$EAGER_INPUT_STREAMING_PATCH"
 echo "✓ Eager input streaming patch applied"
 
-# --- Patch 6: Prefill race fix (rebind session routes to session.directory) ---
+# --- Patch 8: Prefill race fix (rebind session routes to session.directory) ---
 
 echo "Applying prefill-fix.patch..."
 if ! git apply --check "$PREFILL_FIX_PATCH" 2>/dev/null; then

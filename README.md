@@ -1,8 +1,8 @@
 # opencode-patched
 
-**OpenCode with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
+**OpenCode with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
 
-This repository combines five patches into a single OpenCode binary, built automatically for 4 platforms.
+This repository layers prompt caching and local patches into a single OpenCode binary, built automatically for 4 platforms.
 
 ## Patches Included
 
@@ -10,7 +10,19 @@ This repository combines five patches into a single OpenCode binary, built autom
 
 Fetched at build time from [opencode-cached](https://github.com/johnnymo87/opencode-cached). Adds provider-specific cache configuration for 19+ providers, reducing cache write costs by ~44% and effective costs by ~73%.
 
-### 2. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
+### 2. Prompt-Loop Byte Identity ([PR #25367](https://github.com/anomalyco/opencode/pull/25367))
+
+Stored locally as `patches/prompt-loop-cache.patch`. Caches the conversation array across prompt-loop iterations so tool-call continuations preserve byte identity. This targets the flat-cache-read + growing-uncached-input pattern where repeated tool-loop calls keep paying full input price for the same growing tail.
+
+Captured from PR head `810aaffd44472f6e6d1accff53048f9e2009e41c`.
+
+### 3. Cache-Aligned Compaction ([PR #25100](https://github.com/anomalyco/opencode/pull/25100))
+
+Stored locally as `patches/cache-aligned-compaction.patch`. Rationale: compaction request construction was provider-independent uncached work; aligning compaction with normal prompt-loop context lets future compactions reuse prefix cache where provider/model conditions allow. Applied after `prompt-loop-cache.patch` and before existing vim/tool/MCP/eager/prefill patches.
+
+Captured from PR #25100 head `972380a75249b01a424010e8bc0453e15a3a14c2`.
+
+### 4. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
 
 Stored locally as `patches/vim.patch`. Adds optional vim motions to the prompt input. Disabled by default -- enable with `tui.vim: true` or toggle from the command palette.
 
@@ -22,17 +34,17 @@ Supported motions:
 - Scrolling: `Ctrl+e/y/d/u/f/b`
 - `Enter` in normal mode submits
 
-### 3. Tool Use/Result Mismatch Fix ([PR #16751](https://github.com/anomalyco/opencode/pull/16751))
+### 5. Tool Use/Result Mismatch Fix ([PR #16751](https://github.com/anomalyco/opencode/pull/16751))
 
 Stored locally as `patches/tool-fix.patch`. Fixes the widespread `tool_use ids were found without tool_result blocks` error ([#16749](https://github.com/anomalyco/opencode/issues/16749)) that corrupts sessions when stream errors cause lost step boundaries. Injects synthetic step-start boundaries at message reconstruction time to prevent interleaved tool_use/text in assistant messages that the Anthropic API rejects.
 
-### 4. MCP Auto-Reconnect ([Issue #15247](https://github.com/anomalyco/opencode/issues/15247))
+### 6. MCP Auto-Reconnect ([Issue #15247](https://github.com/anomalyco/opencode/issues/15247))
 
 Stored locally as `patches/mcp-reconnect.patch`. Automatically reconnects remote MCP servers when the server restarts and the session becomes stale. Without this patch, `callTool` fails at the transport layer with "Session not found" / HTTP 404 errors, requiring a manual MCP toggle (ctrl+p) or full OpenCode restart.
 
 The patch wraps remote MCP tool execution with a try/catch that detects transport-level errors (stale sessions, connection refused, etc.), closes the stale client, creates a fresh transport + client, refreshes tool definitions, and retries the call once.
 
-### 5. Eager Input Streaming Workaround ([Issue #23541](https://github.com/anomalyco/opencode/issues/23541), [#23257](https://github.com/anomalyco/opencode/issues/23257), [#23767](https://github.com/anomalyco/opencode/issues/23767))
+### 7. Eager Input Streaming Workaround ([Issue #23541](https://github.com/anomalyco/opencode/issues/23541), [#23257](https://github.com/anomalyco/opencode/issues/23257), [#23767](https://github.com/anomalyco/opencode/issues/23767))
 
 Stored locally as `patches/eager-input-streaming.patch`. Disables `toolStreaming` for all `@ai-sdk/anthropic`-backed providers (including `@ai-sdk/google-vertex/anthropic`).
 
@@ -93,7 +105,7 @@ Timing Chain (every 8 hours):
       |-> builds v{VER}-cached        -- applies caching patch, publishes
 
 :01  opencode-patched/sync-cached     -- detects new -cached release
-       |-> builds v{VER}-patched       -- applies caching + vim + tool fix + mcp reconnect + eager-input-streaming patches, publishes
+       |-> builds v{VER}-patched       -- applies caching + prompt-loop-cache + cache-aligned-compaction + vim + tool fix + mcp reconnect + eager-input-streaming + prefill-fix patches, publishes
 :01  opencode-patched/sync-vim-pr     -- checks PR #12679 for changes
 :01  opencode-patched/sync-tool-fix-pr -- checks PR #16751 for changes
 
@@ -104,20 +116,22 @@ Timing Chain (every 8 hours):
 
 1. Clone upstream OpenCode at the release tag
 2. Fetch `caching.patch` from [opencode-cached](https://github.com/johnnymo87/opencode-cached) (always latest from `main`)
-3. Apply `caching.patch`, then local `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`
+3. Apply `caching.patch`, then local `prompt-loop-cache.patch`, then `cache-aligned-compaction.patch`, then `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`, then `prefill-fix.patch`
 4. Build with Bun for 4 platforms (linux/darwin x arm64/x64)
 5. Publish release as `v{VERSION}-patched`
 
 ### Patch Independence
 
-The five patches modify mostly different areas of the codebase:
+The patches modify mostly different areas of the codebase:
 - **Caching**: `config/agent.ts`, `config/provider.ts`, `provider/config.ts`, `provider/transform.ts`, `session/prompt.ts`
+- **Prompt-loop cache**: `app/vite.js`, `session/prompt.ts`
+- **Cache-aligned compaction**: `session/prompt.ts`
 - **Vim**: `cli/cmd/tui/component/vim/*`, `cli/cmd/tui/component/prompt/index.tsx`, `cli/cmd/tui/app.tsx`, `cli/cmd/tui/config/tui-schema.ts`
 - **Tool fix**: `session/message-v2.ts`, `test/session/message-v2.test.ts`
 - **MCP reconnect**: `mcp/index.ts`
 - **Eager input streaming**: `provider/transform.ts` (different region from caching -- inserts a single `toolStreaming = false` block at the end of `options()`)
 
-The only file touched by more than one patch is `provider/transform.ts` (caching + eager-input-streaming). The two patches modify disjoint regions and apply cleanly in either order.
+The files touched by more than one patch are `provider/transform.ts` (caching + eager-input-streaming) and `session/prompt.ts` (caching + prompt-loop-cache + cache-aligned-compaction). The overlapping patches modify disjoint regions and apply cleanly in the documented order.
 
 ## Patch Ownership
 
@@ -126,6 +140,8 @@ Each patch is owned by a specific repo. Do not edit a patch in the wrong repo.
 | Patch | Owned by | Upstream PR guide |
 |-------|----------|-------------------|
 | `caching.patch` | [opencode-cached](https://github.com/johnnymo87/opencode-cached) (`patches/caching.patch`) | PR #5422 |
+| `prompt-loop-cache.patch` | **this repo** (`patches/prompt-loop-cache.patch`) | PR #25367 |
+| `cache-aligned-compaction.patch` | **this repo** (`patches/cache-aligned-compaction.patch`) | PR #25100 |
 | `vim.patch` | **this repo** (`patches/vim.patch`) | PR #12679 |
 | `tool-fix.patch` | **this repo** (`patches/tool-fix.patch`) | PR #16751 |
 | `mcp-reconnect.patch` | **this repo** (`patches/mcp-reconnect.patch`) | Issue #15247 |
@@ -141,6 +157,28 @@ managed in the sibling repo `~/projects/opencode-cached`; edits belong there, no
 This is handled by [opencode-cached](https://github.com/johnnymo87/opencode-cached). If the caching patch fails on a new upstream version, opencode-cached won't release, and this repo won't attempt a build.
 
 To refresh: edit `~/projects/opencode-cached/patches/caching.patch` (not this repo).
+
+### When the Prompt-Loop Cache Patch Breaks (Build Failure)
+
+The build fails and creates a GitHub issue automatically. This blocks publication.
+
+Use PR [#25367](https://github.com/anomalyco/opencode/pull/25367) as the behavioral guide when refreshing. The patch should preserve prompt-loop message byte identity across tool-call continuations while forcing full reloads after compaction, subtasks, and overflow recovery.
+
+1. Check whether upstream already has the fix; if yes, remove `patches/prompt-loop-cache.patch` and update `patches/apply.sh`
+2. If the fix is absent, regenerate from the PR: `gh pr diff 25367 --repo anomalyco/opencode > patches/prompt-loop-cache.patch`
+3. Review, commit, push
+4. Re-trigger: `gh workflow run build-release.yml --field version=X.Y.Z`
+
+### When the Cache-Aligned Compaction Patch Breaks (Build Failure)
+
+The build fails and creates a GitHub issue automatically. This blocks publication.
+
+Maintenance note: refresh from PR #25100 if it drifts; drop when upstream includes it. Use PR [#25100](https://github.com/anomalyco/opencode/pull/25100) as the behavioral guide. The patch should align compaction requests with normal prompt-loop context.
+
+1. Check whether upstream already has the fix; if yes, remove `patches/cache-aligned-compaction.patch` and update `patches/apply.sh`
+2. If the fix is absent, regenerate from the PR: `gh pr diff 25100 --repo anomalyco/opencode > patches/cache-aligned-compaction.patch`
+3. Review, commit, push
+4. Re-trigger: `gh workflow run build-release.yml --field version=X.Y.Z`
 
 ### When the Vim Patch Breaks (Build Failure)
 
@@ -218,6 +256,8 @@ Monthly automated check (`check-sunset.yml`) monitors all upstream PRs:
 - **OpenCode**: [anomalyco/opencode](https://github.com/anomalyco/opencode)
 - **Caching PR**: [PR #5422](https://github.com/anomalyco/opencode/pull/5422) by [@ormandj](https://github.com/ormandj)
 - **Caching builds**: [opencode-cached](https://github.com/johnnymo87/opencode-cached)
+- **Prompt-loop cache PR**: [PR #25367](https://github.com/anomalyco/opencode/pull/25367) by [@BYK](https://github.com/BYK)
+- **Cache-aligned compaction PR**: [PR #25100](https://github.com/anomalyco/opencode/pull/25100)
 - **Vim PR**: [PR #12679](https://github.com/anomalyco/opencode/pull/12679) by [@leohenon](https://github.com/leohenon)
 - **Tool fix PR**: [PR #16751](https://github.com/anomalyco/opencode/pull/16751) by [@altendky](https://github.com/altendky)
 - **MCP reconnect**: [Issue #15247](https://github.com/anomalyco/opencode/issues/15247) -- original patch
