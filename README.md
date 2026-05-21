@@ -1,6 +1,6 @@
 # opencode-patched
 
-**OpenCode with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
+**OpenCode with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
 
 This repository layers prompt caching and local patches into a single OpenCode binary, built automatically for 4 platforms.
 
@@ -22,7 +22,13 @@ Stored locally as `patches/cache-aligned-compaction.patch`. Rationale: compactio
 
 Captured from PR #25100 head `972380a75249b01a424010e8bc0453e15a3a14c2`.
 
-### 4. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
+### 4. Gemini Empty Parts Fix ([PR #28669](https://github.com/anomalyco/opencode/pull/28669))
+
+Stored locally as `patches/gemini-empty-parts.patch`. Pads completely empty Gemini user, assistant, or tool messages with an empty string text part before serialization. Vertex/Gemini rejects `parts: []` with `Unable to submit request because it must include at least one parts field`.
+
+Captured from PR #28669 and extended to cover an empty tool message regression.
+
+### 5. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
 
 Stored locally as `patches/vim.patch`. Adds optional vim motions to the prompt input. Disabled by default -- enable with `tui.vim: true` or toggle from the command palette.
 
@@ -34,17 +40,17 @@ Supported motions:
 - Scrolling: `Ctrl+e/y/d/u/f/b`
 - `Enter` in normal mode submits
 
-### 5. Tool Use/Result Mismatch Fix ([PR #16751](https://github.com/anomalyco/opencode/pull/16751))
+### 6. Tool Use/Result Mismatch Fix ([PR #16751](https://github.com/anomalyco/opencode/pull/16751))
 
 Stored locally as `patches/tool-fix.patch`. Fixes the widespread `tool_use ids were found without tool_result blocks` error ([#16749](https://github.com/anomalyco/opencode/issues/16749)) that corrupts sessions when stream errors cause lost step boundaries. Injects synthetic step-start boundaries at message reconstruction time to prevent interleaved tool_use/text in assistant messages that the Anthropic API rejects.
 
-### 6. MCP Auto-Reconnect ([Issue #15247](https://github.com/anomalyco/opencode/issues/15247))
+### 7. MCP Auto-Reconnect ([Issue #15247](https://github.com/anomalyco/opencode/issues/15247))
 
 Stored locally as `patches/mcp-reconnect.patch`. Automatically reconnects remote MCP servers when the server restarts and the session becomes stale. Without this patch, `callTool` fails at the transport layer with "Session not found" / HTTP 404 errors, requiring a manual MCP toggle (ctrl+p) or full OpenCode restart.
 
 The patch wraps remote MCP tool execution with a try/catch that detects transport-level errors (stale sessions, connection refused, etc.), closes the stale client, creates a fresh transport + client, refreshes tool definitions, and retries the call once.
 
-### 7. Eager Input Streaming Workaround ([Issue #23541](https://github.com/anomalyco/opencode/issues/23541), [#23257](https://github.com/anomalyco/opencode/issues/23257), [#23767](https://github.com/anomalyco/opencode/issues/23767))
+### 8. Eager Input Streaming Workaround ([Issue #23541](https://github.com/anomalyco/opencode/issues/23541), [#23257](https://github.com/anomalyco/opencode/issues/23257), [#23767](https://github.com/anomalyco/opencode/issues/23767))
 
 Stored locally as `patches/eager-input-streaming.patch`. Disables `toolStreaming` for all `@ai-sdk/anthropic`-backed providers (including `@ai-sdk/google-vertex/anthropic`).
 
@@ -105,7 +111,7 @@ Timing Chain (every 8 hours):
       |-> builds v{VER}-cached        -- applies caching patch, publishes
 
 :01  opencode-patched/sync-cached     -- detects new -cached release
-       |-> builds v{VER}-patched       -- applies caching + prompt-loop-cache + cache-aligned-compaction + vim + tool fix + mcp reconnect + eager-input-streaming + prefill-fix patches, publishes
+        |-> builds v{VER}-patched       -- applies caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + eager-input-streaming + prefill-fix patches, publishes
 :01  opencode-patched/sync-vim-pr     -- checks PR #12679 for changes
 :01  opencode-patched/sync-tool-fix-pr -- checks PR #16751 for changes
 
@@ -116,7 +122,7 @@ Timing Chain (every 8 hours):
 
 1. Clone upstream OpenCode at the release tag
 2. Fetch `caching.patch` from [opencode-cached](https://github.com/johnnymo87/opencode-cached) (always latest from `main`)
-3. Apply `caching.patch`, then local `prompt-loop-cache.patch`, then `cache-aligned-compaction.patch`, then `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`, then `prefill-fix.patch`
+3. Apply `caching.patch`, then local `prompt-loop-cache.patch`, then `cache-aligned-compaction.patch`, then `gemini-empty-parts.patch`, then `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`, then `prefill-fix.patch`
 4. Build with Bun for 4 platforms (linux/darwin x arm64/x64)
 5. Publish release as `v{VERSION}-patched`
 
@@ -126,6 +132,7 @@ The patches modify mostly different areas of the codebase:
 - **Caching**: `config/agent.ts`, `config/provider.ts`, `provider/config.ts`, `provider/transform.ts`, `session/prompt.ts`
 - **Prompt-loop cache**: `app/vite.js`, `session/prompt.ts`
 - **Cache-aligned compaction**: `session/prompt.ts`
+- **Gemini empty parts**: `packages/llm/src/protocols/gemini.ts`, `packages/llm/test/provider/gemini.test.ts`
 - **Vim**: `cli/cmd/tui/component/vim/*`, `cli/cmd/tui/component/prompt/index.tsx`, `cli/cmd/tui/app.tsx`, `cli/cmd/tui/config/tui-schema.ts`
 - **Tool fix**: `session/message-v2.ts`, `test/session/message-v2.test.ts`
 - **MCP reconnect**: `mcp/index.ts`
@@ -142,6 +149,7 @@ Each patch is owned by a specific repo. Do not edit a patch in the wrong repo.
 | `caching.patch` | [opencode-cached](https://github.com/johnnymo87/opencode-cached) (`patches/caching.patch`) | PR #5422 |
 | `prompt-loop-cache.patch` | **this repo** (`patches/prompt-loop-cache.patch`) | PR #25367 |
 | `cache-aligned-compaction.patch` | **this repo** (`patches/cache-aligned-compaction.patch`) | PR #25100 |
+| `gemini-empty-parts.patch` | **this repo** (`patches/gemini-empty-parts.patch`) | PR #28669 |
 | `vim.patch` | **this repo** (`patches/vim.patch`) | PR #12679 |
 | `tool-fix.patch` | **this repo** (`patches/tool-fix.patch`) | PR #16751 |
 | `mcp-reconnect.patch` | **this repo** (`patches/mcp-reconnect.patch`) | Issue #15247 |
@@ -179,6 +187,18 @@ Maintenance note: refresh from PR #25100 if it drifts; drop when upstream includ
 2. If the fix is absent, regenerate from the PR: `gh pr diff 25100 --repo anomalyco/opencode > patches/cache-aligned-compaction.patch`
 3. Review, commit, push
 4. Re-trigger: `gh workflow run build-release.yml --field version=X.Y.Z`
+
+### When the Gemini Empty Parts Patch Breaks (Build Failure)
+
+The build fails and creates a GitHub issue automatically. This blocks publication.
+
+Use PR [#28669](https://github.com/anomalyco/opencode/pull/28669) as the behavioral guide when refreshing. If the upstream release already includes the fix, drop `patches/gemini-empty-parts.patch` and update `patches/apply.sh`.
+
+1. Check whether upstream already pads empty Gemini messages before request serialization.
+2. If fix is present upstream: remove `patches/gemini-empty-parts.patch` and update `patches/apply.sh`.
+3. If fix is absent: regenerate from the PR and keep the empty tool-message regression coverage.
+4. Review, commit, push.
+5. Re-trigger: `gh workflow run build-release.yml --field version=X.Y.Z`
 
 ### When the Vim Patch Breaks (Build Failure)
 
@@ -258,6 +278,7 @@ Monthly automated check (`check-sunset.yml`) monitors all upstream PRs:
 - **Caching builds**: [opencode-cached](https://github.com/johnnymo87/opencode-cached)
 - **Prompt-loop cache PR**: [PR #25367](https://github.com/anomalyco/opencode/pull/25367) by [@BYK](https://github.com/BYK)
 - **Cache-aligned compaction PR**: [PR #25100](https://github.com/anomalyco/opencode/pull/25100)
+- **Gemini empty parts PR**: [PR #28669](https://github.com/anomalyco/opencode/pull/28669)
 - **Vim PR**: [PR #12679](https://github.com/anomalyco/opencode/pull/12679) by [@leohenon](https://github.com/leohenon)
 - **Tool fix PR**: [PR #16751](https://github.com/anomalyco/opencode/pull/16751) by [@altendky](https://github.com/altendky)
 - **MCP reconnect**: [Issue #15247](https://github.com/anomalyco/opencode/issues/15247) -- original patch

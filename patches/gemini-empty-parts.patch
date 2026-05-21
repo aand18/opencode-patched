@@ -1,0 +1,63 @@
+diff --git a/packages/llm/src/protocols/gemini.ts b/packages/llm/src/protocols/gemini.ts
+index 6e0b82a..6c1aa78 100644
+--- a/packages/llm/src/protocols/gemini.ts
++++ b/packages/llm/src/protocols/gemini.ts
+@@ -196,6 +196,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
+           return yield* ProviderShared.unsupportedContent("Gemini", "user", ["text", "media"])
+         parts.push(lowerUserPart(part))
+       }
++      if (parts.length === 0) parts.push({ text: "" })
+       contents.push({ role: "user", parts })
+       continue
+     }
+@@ -218,6 +219,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
+           continue
+         }
+       }
++      if (parts.length === 0) parts.push({ text: "" })
+       contents.push({ role: "model", parts })
+       continue
+     }
+@@ -236,6 +238,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
+         },
+       })
+     }
++    if (parts.length === 0) parts.push({ text: "" })
+     contents.push({ role: "user", parts })
+   }
+ 
+diff --git a/packages/llm/test/provider/gemini.test.ts b/packages/llm/test/provider/gemini.test.ts
+index 7e6bbc8..5a5c4b3 100644
+--- a/packages/llm/test/provider/gemini.test.ts
++++ b/packages/llm/test/provider/gemini.test.ts
+@@ -110,6 +110,30 @@ describe("Gemini route", () => {
+     }),
+   )
+ 
++  it.effect("pads completely empty messages with an empty string text part", () =>
++    Effect.gen(function* () {
++      const prepared = yield* LLMClient.prepare(
++        LLM.request({
++          id: "req_empty_parts",
++          model,
++          messages: [
++            Message.user([]),
++            Message.assistant([]),
++            Message.make({ role: "tool", content: [] }),
++          ],
++        }),
++      )
++
++      expect(prepared.body).toEqual({
++        contents: [
++          { role: "user", parts: [{ text: "" }] },
++          { role: "model", parts: [{ text: "" }] },
++          { role: "user", parts: [{ text: "" }] },
++        ],
++      })
++    }),
++  )
++
+   it.effect("sanitizes integer enums, dangling required, untyped arrays, and scalar object keys", () =>
+     Effect.gen(function* () {
+       const prepared = yield* LLMClient.prepare(

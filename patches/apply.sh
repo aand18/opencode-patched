@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Apply caching + prompt-loop-cache + cache-aligned-compaction + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix
+# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Fetches caching.patch from opencode-cached (never duplicated here),
-# then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, vim.patch, tool-fix.patch,
-# mcp-reconnect.patch, eager-input-streaming.patch, and prefill-fix.patch on top.
+# then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
+# vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch, and prefill-fix.patch on top.
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ SOURCE_DIR="$1"
 SCRIPT_DIR="$(dirname "$0")"
 PROMPT_LOOP_CACHE_PATCH="$SCRIPT_DIR/prompt-loop-cache.patch"
 CACHE_ALIGNED_COMPACTION_PATCH="$SCRIPT_DIR/cache-aligned-compaction.patch"
+GEMINI_EMPTY_PARTS_PATCH="$SCRIPT_DIR/gemini-empty-parts.patch"
 VIM_PATCH="$SCRIPT_DIR/vim.patch"
 TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
@@ -38,6 +39,11 @@ fi
 
 if [ ! -f "$CACHE_ALIGNED_COMPACTION_PATCH" ]; then
   echo "Error: Cache aligned compaction patch not found: $CACHE_ALIGNED_COMPACTION_PATCH"
+  exit 1
+fi
+
+if [ ! -f "$GEMINI_EMPTY_PARTS_PATCH" ]; then
+  echo "Error: Gemini empty parts patch not found: $GEMINI_EMPTY_PARTS_PATCH"
   exit 1
 fi
 
@@ -145,7 +151,28 @@ fi
 git apply "$CACHE_ALIGNED_COMPACTION_PATCH"
 echo "✓ Cache-aligned compaction patch applied"
 
-# --- Patch 4: Vim keybindings (local) ---
+# --- Patch 4: Gemini empty parts workaround (PR #28669) ---
+
+echo "Applying gemini-empty-parts.patch..."
+if ! git apply --check "$GEMINI_EMPTY_PARTS_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ GEMINI EMPTY PARTS PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$GEMINI_EMPTY_PARTS_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The Gemini empty parts patch may need updating for this upstream version."
+  echo "Source PR: https://github.com/anomalyco/opencode/pull/28669"
+  exit 1
+fi
+
+git apply "$GEMINI_EMPTY_PARTS_PATCH"
+echo "✓ Gemini empty parts patch applied"
+
+# --- Patch 5: Vim keybindings (local) ---
 
 echo "Applying vim.patch..."
 if ! git apply --check "$VIM_PATCH" 2>/dev/null; then
@@ -166,7 +193,7 @@ fi
 git apply "$VIM_PATCH"
 echo "✓ Vim patch applied"
 
-# --- Patch 5: Tool use/result fix (local) ---
+# --- Patch 6: Tool use/result fix (local) ---
 
 echo "Applying tool-fix.patch..."
 if ! git apply --check "$TOOL_FIX_PATCH" 2>/dev/null; then
@@ -187,7 +214,7 @@ fi
 git apply "$TOOL_FIX_PATCH"
 echo "✓ Tool fix patch applied"
 
-# --- Patch 6: MCP auto-reconnect (local) ---
+# --- Patch 7: MCP auto-reconnect (local) ---
 
 echo "Applying mcp-reconnect.patch..."
 if ! git apply --check "$MCP_RECONNECT_PATCH" 2>/dev/null; then
@@ -208,7 +235,7 @@ fi
 git apply "$MCP_RECONNECT_PATCH"
 echo "✓ MCP reconnect patch applied"
 
-# --- Patch 7: Eager input streaming workaround (local) ---
+# --- Patch 8: Eager input streaming workaround (local) ---
 
 echo "Applying eager-input-streaming.patch..."
 if ! git apply --check "$EAGER_INPUT_STREAMING_PATCH" 2>/dev/null; then
@@ -229,7 +256,7 @@ fi
 git apply "$EAGER_INPUT_STREAMING_PATCH"
 echo "✓ Eager input streaming patch applied"
 
-# --- Patch 8: Prefill race fix (rebind session routes to session.directory) ---
+# --- Patch 9: Prefill race fix (rebind session routes to session.directory) ---
 
 echo "Applying prefill-fix.patch..."
 if ! git apply --check "$PREFILL_FIX_PATCH" 2>/dev/null; then

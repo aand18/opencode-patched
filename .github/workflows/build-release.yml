@@ -37,7 +37,7 @@ jobs:
           echo "Cloned opencode v${{ inputs.version }}"
           git log -1 --oneline
 
-      - name: Apply patches (caching + vim + tool fix + mcp reconnect + eager-input-streaming)
+      - name: Apply patches
         run: |
           cd opencode-src
           ../patches/apply.sh .
@@ -103,7 +103,7 @@ jobs:
           echo "Cloned opencode v${{ inputs.version }}"
           git log -1 --oneline
 
-      - name: Apply patches (caching + vim + tool fix + mcp reconnect + eager-input-streaming)
+      - name: Apply patches
         run: |
           cd opencode-src
           ../patches/apply.sh .
@@ -206,16 +206,17 @@ jobs:
           body: |
             # OpenCode v${{ inputs.version }} with Caching + Local Patches
 
-            This release applies eight patches to OpenCode v${{ inputs.version }}:
+            This release applies nine patches to OpenCode v${{ inputs.version }}:
 
             1. **Prompt caching improvements** from [PR #5422](https://github.com/anomalyco/opencode/pull/5422) (via [opencode-cached](https://github.com/johnnymo87/opencode-cached))
             2. **Prompt-loop byte identity** from [PR #25367](https://github.com/anomalyco/opencode/pull/25367)
             3. **Cache-aligned compaction** from [PR #25100](https://github.com/anomalyco/opencode/pull/25100)
-            4. **Vim keybindings** from [PR #12679](https://github.com/anomalyco/opencode/pull/12679)
-            5. **Tool use/result mismatch fix** from [PR #16751](https://github.com/anomalyco/opencode/pull/16751)
-            6. **MCP auto-reconnect** from [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
-            7. **Eager input streaming workaround** for [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- defaults `toolStreaming = false` for all `@ai-sdk/anthropic`-backed providers (Vertex Anthropic, Bedrock proxies, etc.)
-            8. **Prefill race fix** for session-route workspace binding
+            4. **Gemini empty parts fix** from [PR #28669](https://github.com/anomalyco/opencode/pull/28669)
+            5. **Vim keybindings** from [PR #12679](https://github.com/anomalyco/opencode/pull/12679)
+            6. **Tool use/result mismatch fix** from [PR #16751](https://github.com/anomalyco/opencode/pull/16751)
+            7. **MCP auto-reconnect** from [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
+            8. **Eager input streaming workaround** for [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- defaults `toolStreaming = false` for all `@ai-sdk/anthropic`-backed providers (Vertex Anthropic, Bedrock proxies, etc.)
+            9. **Prefill race fix** for session-route workspace binding
 
             ## Caching Improvements
 
@@ -226,6 +227,10 @@ jobs:
             ## Prompt Cache Alignment
 
             Prompt-loop byte identity preserves the conversation array across tool-call continuations, reducing cache misses from unchanged prompt tails. Cache-aligned compaction reuses normal prompt-loop context for compaction calls when provider/model conditions allow, so future compactions can reuse the same prefix cache.
+
+            ## Gemini Empty Parts Fix
+
+            Pads completely empty Gemini user, assistant, or tool messages with an empty string text part before request serialization. This avoids Vertex/Gemini rejecting `parts: []` with `Unable to submit request because it must include at least one parts field`.
 
             ## Vim Keybindings
 
