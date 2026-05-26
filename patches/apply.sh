@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix
+# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix + instance-state-partition
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Fetches caching.patch from opencode-cached (never duplicated here),
 # then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
-# vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch, and
-# prefill-fix.patch on top.
+# vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch,
+# prefill-fix.patch, and instance-state-partition.patch on top.
 #
 # TARGET UPSTREAM: opencode v1.15.10
 # Patches were rebased from v1.15.0 to v1.15.10 on 2026-05-25.
 # bus-eager-subscribe.patch (PR #27959) and bus instance context fix (PR #28051)
 # were DROPPED because they are both upstream-merged in v1.15.5+.
+# instance-state-partition.patch (one-line server.ts memoMap fix + InstanceBootstrap
+# refactor) is staged here for the upstream PR; sunset signal is the anomalyco/opencode
+# PR being merged (tracked in check-sunset.yml).
 
 set -euo pipefail
 
@@ -31,6 +34,7 @@ TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
 EAGER_INPUT_STREAMING_PATCH="$SCRIPT_DIR/eager-input-streaming.patch"
 PREFILL_FIX_PATCH="$SCRIPT_DIR/prefill-fix.patch"
+INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
 CACHING_PATCH_URL="https://raw.githubusercontent.com/johnnymo87/opencode-cached/main/patches/caching.patch"
 
 if [ ! -d "$SOURCE_DIR" ]; then
@@ -75,6 +79,11 @@ fi
 
 if [ ! -f "$PREFILL_FIX_PATCH" ]; then
   echo "Error: Prefill fix patch not found: $PREFILL_FIX_PATCH"
+  exit 1
+fi
+
+if [ ! -f "$INSTANCE_STATE_PARTITION_PATCH" ]; then
+  echo "Error: Instance state partition patch not found: $INSTANCE_STATE_PARTITION_PATCH"
   exit 1
 fi
 
@@ -282,6 +291,28 @@ fi
 
 git apply "$PREFILL_FIX_PATCH"
 echo "✓ Prefill fix patch applied"
+
+# --- Patch 10: InstanceStore partition fix (one-line server.ts memoMap + InstanceBootstrap refactor) ---
+
+echo "Applying instance-state-partition.patch..."
+if ! git apply --check "$INSTANCE_STATE_PARTITION_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ INSTANCE STATE PARTITION PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$INSTANCE_STATE_PARTITION_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The instance-state-partition patch may need updating for this upstream version."
+  echo "Refs: pigeon/docs/plans/2026-05-26-instancestate-partition-fix-design.md"
+  echo "Upstream PR target: anomalyco/opencode (to be filed after burn-in)"
+  exit 1
+fi
+
+git apply "$INSTANCE_STATE_PARTITION_PATCH"
+echo "✓ Instance state partition patch applied"
 
 # --- Summary ---
 

@@ -231,7 +231,7 @@ jobs:
           body: |
             # OpenCode v${{ inputs.version }} with Caching + Local Patches
 
-            This release applies nine patches to OpenCode v${{ inputs.version }}:
+            This release applies ten patches to OpenCode v${{ inputs.version }}:
 
             1. **Prompt caching improvements** from [PR #5422](https://github.com/anomalyco/opencode/pull/5422) (via [opencode-cached](https://github.com/johnnymo87/opencode-cached))
             2. **Prompt-loop byte identity** from [PR #25367](https://github.com/anomalyco/opencode/pull/25367)
@@ -242,6 +242,7 @@ jobs:
             7. **MCP auto-reconnect** from [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
             8. **Eager input streaming workaround** for [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- defaults `toolStreaming = false` for all `@ai-sdk/anthropic`-backed providers (Vertex Anthropic, Bedrock proxies, etc.)
             9. **Prefill race fix** for session-route workspace binding
+            10. **InstanceState partition fix** -- share `memoMap` between TCP listener and in-process webHandler so both HTTP pipelines materialize one `InstanceStore.Service` per directory. Fixes the `Question` tool hang on submit and prevents future partition-induced bugs in services using `InstanceState`. Refactors `InstanceLayer.layer` to make `InstanceBootstrap` injectable. Upstream PR target: anomalyco/opencode (to be filed after multi-machine burn-in).
 
             Note: As of v1.15.10, the bus-eager-subscribe patch (PR #27959) and the bus instance-context fix (PR #28051) are DROPPED -- both are upstream-merged in v1.15.5+. Telegram stop-notification reliability now depends on the v1.15.10 base, which also contains the load-bearing PR #27825 (`fix(sync): publish events on injected project bus`).
 
@@ -319,6 +320,7 @@ jobs:
             **MCP reconnect**: [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
             **Eager input streaming**: [Issue #23541](https://github.com/anomalyco/opencode/issues/23541)
             **Prefill race fix**: local route binding patch
+            **InstanceState partition fix**: local patch (upstream PR target: anomalyco/opencode, pending burn-in)
           files: |
             artifacts/opencode-linux-arm64.tar.gz
             artifacts/opencode-linux-x64.tar.gz
