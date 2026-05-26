@@ -1,14 +1,14 @@
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
-index 832811b..2a20cc8 100644
+index 85985876e..6982cef00 100644
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
 @@ -1,4 +1,4 @@
 -import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
 +import { dynamicTool, type Tool, jsonSchema, type JSONSchema7, type ToolExecutionOptions } from "ai"
+ import { serviceUse } from "@/effect/service-use"
  import { Client } from "@modelcontextprotocol/sdk/client/index.js"
  import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
- import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
-@@ -150,6 +150,24 @@ function listTools(key: string, client: MCPClient, timeout: number) {
+@@ -154,6 +154,24 @@ function listTools(key: string, client: MCPClient, timeout: number) {
    )
  }
  
@@ -33,7 +33,7 @@ index 832811b..2a20cc8 100644
  // Convert MCP tool definition to AI SDK Tool type
  function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
    const inputSchema = mcpTool.inputSchema
-@@ -666,6 +684,8 @@ export const layer = Layer.effect(
+@@ -672,6 +690,8 @@ export const layer = Layer.effect(
          ([clientName]) => s.status[clientName]?.status === "connected",
        )
  
@@ -42,7 +42,7 @@ index 832811b..2a20cc8 100644
        yield* Effect.forEach(
          connectedClients,
          ([clientName, client]) =>
-@@ -681,7 +701,63 @@ export const layer = Layer.effect(
+@@ -687,7 +707,63 @@ export const layer = Layer.effect(
  
              const timeout = entry?.timeout ?? defaultTimeout
              for (const mcpTool of listed) {
@@ -107,3 +107,6 @@ index 832811b..2a20cc8 100644
              }
            }),
          { concurrency: "unbounded" },
+-- 
+2.51.2
+

@@ -1,11 +1,21 @@
 diff --git a/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts b/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts
-index d491369..9ef2be4 100644
+index 90f3ce477..9ef2be4e1 100644
 --- a/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts
 +++ b/packages/opencode/src/server/routes/instance/httpapi/middleware/instance-context.ts
-@@ -26,8 +26,18 @@ function provideInstanceContext<E>(
+@@ -1,4 +1,4 @@
+-import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
++import { WorkspaceRef } from "@/effect/instance-ref"
+ import { InstanceStore } from "@/project/instance-store"
+ import { Effect, Layer } from "effect"
+ import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+@@ -26,10 +26,19 @@ function provideInstanceContext<E>(
  ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext> {
    return Effect.gen(function* () {
      const route = yield* WorkspaceRouteContext
+-    const ctx = yield* store.load({ directory: decode(route.directory) })
+-    return yield* effect.pipe(
+-      Effect.provideService(InstanceRef, ctx),
+-      Effect.provideService(WorkspaceRef, route.workspaceID),
 +    // Prefer the session's stored directory (canonical filesystem path, never URL-
 +    // encoded) over the request-supplied route directory. Closes the multi-cwd race
 +    // where concurrent prompt_async requests for the same session arriving with
@@ -16,23 +26,24 @@ index d491369..9ef2be4 100644
 +    // again. See opencode-patched/docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md
 +    // for the v1.15.0 redesign rationale.
 +    const directory = route.sessionDirectory ?? decode(route.directory)
-     return yield* store.provide(
--      { directory: decode(route.directory) },
++    return yield* store.provide(
 +      { directory },
-       effect.pipe(Effect.provideService(WorkspaceRef, route.workspaceID)),
++      effect.pipe(Effect.provideService(WorkspaceRef, route.workspaceID)),
      )
    })
+ }
 diff --git a/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts b/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
-index 1d665fd..89660bd 100644
+index 8bffe5964..e372a5a8e 100644
 --- a/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
 +++ b/packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts
-@@ -28,9 +28,14 @@ export const WorkspaceRoutingQuery = Schema.Struct(WorkspaceRoutingQueryFields)
+@@ -28,10 +28,15 @@ export const WorkspaceRoutingQuery = Schema.Struct(WorkspaceRoutingQueryFields)
  
  type RemoteTarget = Extract<Target, { type: "remote" }>
  
 -type RequestPlan = Data.TaggedEnum<{
 +/** @internal exported for tests; not part of the stable public surface. */
 +export type RequestPlan = Data.TaggedEnum<{
+   InvalidWorkspace: {}
    MissingWorkspace: { readonly workspaceID: WorkspaceID }
 -  Local: { readonly directory: string; readonly workspaceID?: WorkspaceID }
 +  Local: {
@@ -43,7 +54,7 @@ index 1d665fd..89660bd 100644
    Remote: {
      readonly request: HttpServerRequest.HttpServerRequest
      readonly workspace: Workspace.Info
-@@ -45,6 +50,15 @@ export class WorkspaceRouteContext extends Context.Service<
+@@ -47,6 +52,15 @@ export class WorkspaceRouteContext extends Context.Service<
    {
      readonly directory: string
      readonly workspaceID?: WorkspaceID
@@ -59,7 +70,7 @@ index 1d665fd..89660bd 100644
    }
  >()("@opencode/ExperimentalHttpApiWorkspaceRouteContext") {}
  
-@@ -144,14 +158,15 @@ function planWorkspaceRequest(
+@@ -157,16 +171,17 @@ function planWorkspaceRequest(
    })
  }
  
@@ -73,12 +84,15 @@ index 1d665fd..89660bd 100644
    return Effect.gen(function* () {
      const url = requestURL(request)
      const envWorkspaceID = configuredWorkspaceID()
--    const workspaceID = selectedWorkspaceID(url, sessionWorkspaceID)
-+    const workspaceID = selectedWorkspaceID(url, session?.workspaceID)
+     const workspaceID = url.pathname.startsWith("/api/")
+-      ? selectedV2WorkspaceID(url, sessionWorkspaceID)
+-      : selectedWorkspaceID(url, sessionWorkspaceID)
++      ? selectedV2WorkspaceID(url, session?.workspaceID)
++      : selectedWorkspaceID(url, session?.workspaceID)
+     if (workspaceID === InvalidWorkspaceID) return RequestPlan.InvalidWorkspace()
      const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
  
-     if (workspaceID && workspace === undefined && !envWorkspaceID) {
-@@ -162,7 +177,11 @@ function planRequest(
+@@ -178,7 +193,11 @@ function planRequest(
        return yield* planWorkspaceRequest(request, url, workspace)
      }
  
@@ -91,8 +105,8 @@ index 1d665fd..89660bd 100644
    })
  }
  
-@@ -174,8 +193,13 @@ function routeWorkspace<E>(
-   return RequestPlan.$match(plan, {
+@@ -201,8 +220,13 @@ function routeWorkspace<E>(
+       ),
      MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
      Remote: ({ request, workspace, target, url }) => proxyRemote(client, request, workspace, target, url),
 -    Local: ({ directory, workspaceID }) =>
@@ -107,7 +121,7 @@ index 1d665fd..89660bd 100644
    })
  }
  
-@@ -196,7 +220,7 @@ function routeHttpApiWorkspace<E>(
+@@ -223,7 +247,7 @@ function routeHttpApiWorkspace<E>(
            Effect.catchDefect(() => Effect.succeed(undefined)),
          )
        : undefined
@@ -117,7 +131,7 @@ index 1d665fd..89660bd 100644
    })
  }
 diff --git a/packages/opencode/test/server/httpapi-workspace-routing.test.ts b/packages/opencode/test/server/httpapi-workspace-routing.test.ts
-index 9d6dc8c..7a238fd 100644
+index 02a1361ba..43c52fb4b 100644
 --- a/packages/opencode/test/server/httpapi-workspace-routing.test.ts
 +++ b/packages/opencode/test/server/httpapi-workspace-routing.test.ts
 @@ -22,6 +22,7 @@ import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
@@ -212,3 +226,6 @@ index 9d6dc8c..7a238fd 100644
 +    }),
 +  )
 +})
+-- 
+2.51.2
+

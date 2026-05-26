@@ -231,7 +231,7 @@ jobs:
           body: |
             # OpenCode v${{ inputs.version }} with Caching + Local Patches
 
-            This release applies ten patches to OpenCode v${{ inputs.version }}:
+            This release applies nine patches to OpenCode v${{ inputs.version }}:
 
             1. **Prompt caching improvements** from [PR #5422](https://github.com/anomalyco/opencode/pull/5422) (via [opencode-cached](https://github.com/johnnymo87/opencode-cached))
             2. **Prompt-loop byte identity** from [PR #25367](https://github.com/anomalyco/opencode/pull/25367)
@@ -242,7 +242,8 @@ jobs:
             7. **MCP auto-reconnect** from [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
             8. **Eager input streaming workaround** for [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- defaults `toolStreaming = false` for all `@ai-sdk/anthropic`-backed providers (Vertex Anthropic, Bedrock proxies, etc.)
             9. **Prefill race fix** for session-route workspace binding
-            10. **Bus eager subscribe** from [PR #27959](https://github.com/sst/opencode/pull/27959) -- closes the plugin event-loss race that drops `message.updated` events and breaks plugin-driven notifications (sunset when upstream version > v1.15.0 is targeted)
+
+            Note: As of v1.15.10, the bus-eager-subscribe patch (PR #27959) and the bus instance-context fix (PR #28051) are DROPPED -- both are upstream-merged in v1.15.5+. Telegram stop-notification reliability now depends on the v1.15.10 base, which also contains the load-bearing PR #27825 (`fix(sync): publish events on injected project bus`).
 
             ## Caching Improvements
 
@@ -281,10 +282,6 @@ jobs:
 
             Disables `toolStreaming` for all `@ai-sdk/anthropic`-backed providers (including `@ai-sdk/google-vertex/anthropic`). Since `@ai-sdk/anthropic >= 3.0.58`, the SDK injects `eager_input_streaming: true` into every tool definition, which Anthropic-shape proxies (Google Vertex, AWS Bedrock, GitHub Copilot, corporate gateways) reject with `tools.0.custom.eager_input_streaming: Extra inputs are not permitted`. Upstream only fixes this for `github-copilot`; this patch generalizes the workaround.
 
-            ## Bus Eager Subscribe
-
-            Cherry-picks upstream commit `cb3549324` (PR #27959), merged 2026-05-18 -- 4 days AFTER v1.15.0 was tagged, so v1.15.0 ships the bug. The fix changes `bus.subscribe` / `bus.subscribeAll` to return `Effect<Stream, _, Scope>` so callers `yield*` them, which establishes the underlying PubSub subscription eagerly in the caller's Scope. The previous lazy-acquisition pattern lost any events published in the race window between plugin init and stream consumption start; in practice this drops high-frequency `message.updated` events and breaks plugin-driven Telegram stop notifications (pigeon bead ccr-mu1). **Sunset criterion**: when this repo upgrades to an upstream version > v1.15.0, delete `patches/bus-eager-subscribe.patch` and its block in `apply.sh` (the fix is already in any release newer than v1.15.0).
-
             ## Installation
 
             ### Linux (arm64)
@@ -322,7 +319,6 @@ jobs:
             **MCP reconnect**: [Issue #15247](https://github.com/anomalyco/opencode/issues/15247)
             **Eager input streaming**: [Issue #23541](https://github.com/anomalyco/opencode/issues/23541)
             **Prefill race fix**: local route binding patch
-            **Bus eager subscribe**: [PR #27959](https://github.com/sst/opencode/pull/27959)
           files: |
             artifacts/opencode-linux-arm64.tar.gz
             artifacts/opencode-linux-x64.tar.gz
@@ -362,8 +358,7 @@ jobs:
             6. **MCP reconnect patch conflict**: The local mcp-reconnect.patch may not apply to v${version}
             7. **Eager input streaming patch conflict**: The local eager-input-streaming.patch may not apply to v${version}
             8. **Prefill fix patch conflict**: The local prefill-fix.patch may not apply to v${version}
-            9. **Bus eager subscribe patch conflict**: The local bus-eager-subscribe.patch may not apply to v${version}. If upstream v${version} is newer than v1.15.0, the fix (cb3549324, PR #27959) is already included upstream -- DROP this patch (remove patches/bus-eager-subscribe.patch and its block in apply.sh).
-            10. **Build failure**: OpenCode build process may have changed
+            9. **Build failure**: OpenCode build process may have changed
 
             ### Action Required
 
@@ -391,8 +386,7 @@ jobs:
                \`\`\`
             7. If MCP reconnect patch failed, review upstream changes to \`mcp/index.ts\` and update manually
             8. If prefill fix patch failed, review upstream route/middleware changes and update manually
-            9. If bus eager subscribe patch failed AND upstream v${version} > v1.15.0, the fix is already upstream -- drop the patch (see patches/bus-eager-subscribe.patch SUNSET CRITERION comment in apply.sh)
-            10. Re-run: \`gh workflow run build-release.yml --field version=${version}\` (or add \`--field revision=N\` to re-release the same upstream version with updated patches; the release tag becomes \`v${version}-patched.N\`)
+            9. Re-run: \`gh workflow run build-release.yml --field version=${version}\` (or add \`--field revision=N\` to re-release the same upstream version with updated patches; the release tag becomes \`v${version}-patched.N\`)
             `;
 
             const issues = await github.rest.issues.listForRepo({

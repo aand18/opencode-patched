@@ -1,6 +1,6 @@
 # opencode-patched
 
-**OpenCode with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541) + [bus eager subscribe](https://github.com/sst/opencode/pull/27959)**
+**OpenCode v1.15.10 with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
 
 This repository layers prompt caching and local patches into a single OpenCode binary, built automatically for 4 platforms.
 
@@ -62,23 +62,16 @@ tools.0.custom.eager_input_streaming: Extra inputs are not permitted
 
 Upstream only fixes this for github-copilot via the `chat.params` plugin hook (gated on `providerID`), leaving Vertex/Bedrock/etc. broken. PRs that proposed a generalized fix ([#23766](https://github.com/anomalyco/opencode/pull/23766), [#23542](https://github.com/anomalyco/opencode/pull/23542)) were rejected by upstream maintainers. This patch defaults `toolStreaming = false` in `ProviderTransform.options()` whenever the model uses `@ai-sdk/anthropic` or `@ai-sdk/google-vertex/anthropic`. Users can opt back in by setting `toolStreaming: true` in their model or agent options.
 
-### 10. Bus Eager Subscribe ([PR #27959](https://github.com/sst/opencode/pull/27959))
+### 9. Prefill race fix
 
-Stored locally as `patches/bus-eager-subscribe.patch`. Upstream commit `cb3549324`, merged 2026-05-18 — **4 days after v1.15.0 was tagged**, so v1.15.0 ships the bug.
+Stored locally as `patches/prefill-fix.patch`. Closes a multi-cwd race where concurrent `prompt_async` requests for the same session, arriving with different `x-opencode-directory` headers, would bind to different per-directory InstanceStore entries and bypass the per-session busy guard. The fix routes session-bound requests through the session's canonical stored `directory` rather than the request-supplied header.
 
-In v1.15.0, `bus.subscribeAll()` returns `Stream.unwrap(... Stream.fromPubSub(...))` which acquires the underlying PubSub subscription **lazily**, on first stream pull. Plugins subscribing via this path drop any events published in the race window between plugin init and stream consumption start. In practice the dropped events are high-frequency message-level events (especially `message.updated`), while low-frequency session events still make it through.
+See `docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md` for the original v1.15.0 redesign rationale.
 
-For the pigeon plugin (`@pigeon/opencode-plugin`), the dropped `message.updated` events leave `currentMessageId` undefined in the plugin's `messageTail` cache. That fails the `shouldNotify` gate at `session.idle` time, suppressing every Telegram stop notification. The bug surfaces as: launched sessions complete silently with no Telegram reply.
+## DROPPED patches (sunset history)
 
-The fix changes `subscribe` / `subscribeAll` to return `Effect<Stream, _, Scope>` so callers `yield*` them, which establishes the PubSub subscription eagerly in the caller's Scope with proper finalizer-based cleanup.
-
-**This is the MINIMAL backport** of cb3549324 — only the `subscribe`/`subscribeAll` Interface + implementation changes and the four call sites that PR #27959 itself updates (`plugin/index.ts`, `project/project.ts`, `project/vcs.ts`, `server/routes/instance/httpapi/handlers/event.ts`, `share/share-next.ts`). It deliberately does NOT include the `ctx: InstanceContext` parameter addition to the module-level `publish()` export, which is from PR #28051 and would cascade into PRs #27731, #27757, #28016 (each updating different `Bus.publish` call sites). The minimal backport compiles cleanly on v1.15.0 + this repo's existing patch stack and introduces zero new typecheck errors.
-
-**SUNSET CRITERION**: When this repo's `apply.sh` is updated to target an opencode version strictly newer than v1.15.0 (i.e. v1.15.1, v1.16.x, …), delete `patches/bus-eager-subscribe.patch` and its block in `apply.sh`. Verify with:
-
-```bash
-cd <opencode-src> && git merge-base --is-ancestor cb3549324 HEAD && echo "fix already upstream"
-```
+- **bus-eager-subscribe.patch (PR #27959)** — DROPPED on 2026-05-25 when this repo cut over from v1.15.0 to v1.15.10. PR #27959 (`fix(bus): acquire PubSub subscription eagerly`) was merged upstream on 2026-05-18 and shipped in v1.15.5. Any opencode release >= v1.15.5 contains the fix natively.
+- **Bus instance context fix (PR #28051)** — never had its own patch in this repo, but the closely-related bug it fixes (sync events publishing on the wrong bus runtime, partitioning `message.updated` from `session.idle` across plugin instances) was the root cause of dropped Telegram stop notifications throughout April/May 2026. The load-bearing fix is actually PR #27825 (`fix(sync): publish events on injected project bus`), with #27757, #28051, and #28187 as supporting changes. ALL of these are in v1.15.5+. See `docs/plans/2026-05-22-bus-fix-investigation-HANDOFF.md` and `docs/plans/2026-05-25-28051-verification-report.md` in the pigeon repo for the full investigation chain.
 
 ## Installation
 

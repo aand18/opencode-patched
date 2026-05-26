@@ -1,20 +1,20 @@
 diff --git a/packages/app/vite.js b/packages/app/vite.js
-index f65a68a1cbc0..28f538909a1a 100644
+index e1f851653..42997fe89 100644
 --- a/packages/app/vite.js
 +++ b/packages/app/vite.js
-@@ -16,6 +16,7 @@ export default [
+@@ -23,6 +23,7 @@ export default [
          resolve: {
            alias: {
              "@": fileURLToPath(new URL("./src", import.meta.url)),
 +            "@opencode-ai/core": fileURLToPath(new URL("../core/src", import.meta.url)),
            },
          },
-         worker: {
+         define: {
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index ba9a4d6f1a0f..77d23a1cfeee 100644
+index 2fc93c482..20437081c 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -1647,12 +1647,23 @@ NOTE: At any point in time through this workflow you should feel free to ask the
+@@ -1243,12 +1243,23 @@ export const layer = Layer.effect(
          let structured: unknown
          let step = 0
          const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
@@ -39,7 +39,7 @@ index ba9a4d6f1a0f..77d23a1cfeee 100644
  
            const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
  
-@@ -1692,6 +1703,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
+@@ -1288,6 +1299,7 @@ export const layer = Layer.effect(
  
            if (task?.type === "subtask") {
              yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
@@ -47,7 +47,7 @@ index ba9a4d6f1a0f..77d23a1cfeee 100644
              continue
            }
  
-@@ -1704,6 +1716,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
+@@ -1300,6 +1312,7 @@ export const layer = Layer.effect(
                overflow: task.overflow,
              })
              if (result === "stop") break
@@ -55,7 +55,7 @@ index ba9a4d6f1a0f..77d23a1cfeee 100644
              continue
            }
  
-@@ -1713,6 +1726,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
+@@ -1309,6 +1322,7 @@ export const layer = Layer.effect(
              (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
            ) {
              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
@@ -63,7 +63,7 @@ index ba9a4d6f1a0f..77d23a1cfeee 100644
              continue
            }
  
-@@ -1859,6 +1873,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
+@@ -1466,6 +1480,7 @@ export const layer = Layer.effect(
                  auto: true,
                  overflow: !handle.message.finish,
                })
@@ -71,3 +71,6 @@ index ba9a4d6f1a0f..77d23a1cfeee 100644
              }
              return "continue" as const
            }).pipe(
+-- 
+2.51.2
+
