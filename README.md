@@ -22,11 +22,34 @@ Stored locally as `patches/cache-aligned-compaction.patch`. Rationale: compactio
 
 Captured from PR #25100 head `972380a75249b01a424010e8bc0453e15a3a14c2`.
 
-### 4. Gemini Empty Parts Fix ([PR #28669](https://github.com/anomalyco/opencode/pull/28669))
+### 4. Gemini Empty Parts Fix ([PR #28669](https://github.com/anomalyco/opencode/pull/28669), [Issue #17519](https://github.com/anomalyco/opencode/issues/17519))
 
-Stored locally as `patches/gemini-empty-parts.patch`. Pads completely empty Gemini user, assistant, or tool messages with an empty string text part before serialization. Vertex/Gemini rejects `parts: []` with `Unable to submit request because it must include at least one parts field`.
+Stored locally as `patches/gemini-empty-parts.patch`. Vertex/Gemini rejects any
+`contents[]` entry with `parts: []` with `Unable to submit request because it must
+include at least one parts field`. This patch fixes that on **two independent code
+paths**:
 
-Captured from PR #28669 and extended to cover an empty tool message regression.
+- **Native runtime** (`packages/llm/src/protocols/gemini.ts`): pads completely
+  empty Gemini user, assistant, or tool messages with an empty-string text part
+  before serialization. This is the PR #28669 fix, extended to cover an empty
+  tool-message regression. NOTE: the native runtime gate
+  (`session/llm/native-runtime.ts`) only admits `openai`/`anthropic`/`opencode*`
+  providers, so Gemini never actually reaches this path today — this hunk tracks
+  PR #28669 and is future-proofing if upstream ever routes Gemini natively.
+
+- **AI SDK runtime** (`packages/opencode/src/provider/transform.ts`): this is the
+  path Gemini actually uses (`google-vertex` / `google` via `@ai-sdk/google`).
+  `ProviderTransform.message()` → `normalizeMessages()` now drops empty
+  text/reasoning parts and any resulting empty message for `@ai-sdk/google` /
+  `@ai-sdk/google-vertex`, exactly like the pre-existing `@ai-sdk/anthropic` and
+  `@ai-sdk/amazon-bedrock` blocks. The `@ai-sdk/google` converter drops
+  empty-text parts itself (`part.text.length === 0 ? undefined : ...`), so a turn
+  whose only content is an empty part — e.g. the empty "structural separator"
+  text part that Anthropic adaptive-thinking turns persist between `step-start`
+  boundaries, replayed cross-model into a Gemini compaction request — serializes
+  to `parts: []` and 400s the whole request. This is the intermittent
+  compaction failure tracked in Issue #17519; the original `packages/llm` hunk
+  alone never fixed it because Gemini doesn't use that path.
 
 ### 5. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
 
@@ -138,7 +161,7 @@ The patches modify mostly different areas of the codebase:
 - **Caching**: `config/agent.ts`, `config/provider.ts`, `provider/config.ts`, `provider/transform.ts`, `session/prompt.ts`
 - **Prompt-loop cache**: `app/vite.js`, `session/prompt.ts`
 - **Cache-aligned compaction**: `session/prompt.ts`
-- **Gemini empty parts**: `packages/llm/src/protocols/gemini.ts`, `packages/llm/test/provider/gemini.test.ts`
+- **Gemini empty parts**: `packages/llm/src/protocols/gemini.ts`, `packages/llm/test/provider/gemini.test.ts`, `packages/opencode/src/provider/transform.ts`, `packages/opencode/test/provider/transform.test.ts`
 - **Vim**: `cli/cmd/tui/component/vim/*`, `cli/cmd/tui/component/prompt/index.tsx`, `cli/cmd/tui/app.tsx`, `cli/cmd/tui/config/tui-schema.ts`
 - **Tool fix**: `session/message-v2.ts`, `test/session/message-v2.test.ts`
 - **MCP reconnect**: `mcp/index.ts`
@@ -198,11 +221,26 @@ Maintenance note: refresh from PR #25100 if it drifts; drop when upstream includ
 
 The build fails and creates a GitHub issue automatically. This blocks publication.
 
-Use PR [#28669](https://github.com/anomalyco/opencode/pull/28669) as the behavioral guide when refreshing. If the upstream release already includes the fix, drop `patches/gemini-empty-parts.patch` and update `patches/apply.sh`.
+The patch has **two hunks on two code paths** (see section 4 above); a refresh
+must keep both unless upstream has fixed the corresponding path.
 
-1. Check whether upstream already pads empty Gemini messages before request serialization.
-2. If fix is present upstream: remove `patches/gemini-empty-parts.patch` and update `patches/apply.sh`.
-3. If fix is absent: regenerate from the PR and keep the empty tool-message regression coverage.
+- **`packages/llm/src/protocols/gemini.ts`** (native runtime): use PR
+  [#28669](https://github.com/anomalyco/opencode/pull/28669) as the behavioral
+  guide. Pads empty user/assistant/tool messages with an empty-string text part.
+- **`packages/opencode/src/provider/transform.ts`** (AI SDK runtime, the path
+  Gemini actually uses): a `@ai-sdk/google` / `@ai-sdk/google-vertex` block in
+  `normalizeMessages()` that drops empty text/reasoning parts and resulting-empty
+  messages, mirroring the sibling `@ai-sdk/anthropic` / `@ai-sdk/amazon-bedrock`
+  blocks. Tracked by Issue [#17519](https://github.com/anomalyco/opencode/issues/17519).
+  Behavioral check: run `bun test test/provider/transform.test.ts -t "gemini empty parts"`
+  from `packages/opencode`.
+
+1. Check whether upstream already handles empty Gemini parts on **both** paths.
+2. If a path is fixed upstream: drop that hunk; if both are fixed, remove
+   `patches/gemini-empty-parts.patch` and update `patches/apply.sh`.
+3. If absent: refresh the failing hunk (regenerate the `packages/llm` hunk from
+   PR #28669, keep the empty tool-message regression coverage; re-derive the
+   `transform.ts` hunk against the post-cache-aligned-compaction baseline).
 4. Review, commit, push.
 5. Re-trigger: `gh workflow run build-release.yml --field version=X.Y.Z`
 

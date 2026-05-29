@@ -1,5 +1,5 @@
 diff --git a/packages/llm/src/protocols/gemini.ts b/packages/llm/src/protocols/gemini.ts
-index 6e0b82a..6c1aa78 100644
+index 5fe4dcc76..e08f58c64 100644
 --- a/packages/llm/src/protocols/gemini.ts
 +++ b/packages/llm/src/protocols/gemini.ts
 @@ -196,6 +196,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
@@ -27,10 +27,10 @@ index 6e0b82a..6c1aa78 100644
    }
  
 diff --git a/packages/llm/test/provider/gemini.test.ts b/packages/llm/test/provider/gemini.test.ts
-index 7e6bbc8..5a5c4b3 100644
+index 9e519723f..26ee12a00 100644
 --- a/packages/llm/test/provider/gemini.test.ts
 +++ b/packages/llm/test/provider/gemini.test.ts
-@@ -110,6 +110,30 @@ describe("Gemini route", () => {
+@@ -111,6 +111,30 @@ describe("Gemini route", () => {
      }),
    )
  
@@ -61,3 +61,134 @@ index 7e6bbc8..5a5c4b3 100644
    it.effect("sanitizes integer enums, dangling required, untyped arrays, and scalar object keys", () =>
      Effect.gen(function* () {
        const prepared = yield* LLMClient.prepare(
+diff --git a/packages/opencode/src/provider/transform.ts b/packages/opencode/src/provider/transform.ts
+index 2de3d1ca6..e66ece4aa 100644
+--- a/packages/opencode/src/provider/transform.ts
++++ b/packages/opencode/src/provider/transform.ts
+@@ -185,6 +185,41 @@ function normalizeMessages(
+       .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
+   }
+ 
++  // Gemini/Vertex rejects any contents[] entry whose parts array is empty with
++  // "Unable to submit request because it must include at least one parts field".
++  // The @ai-sdk/google converter drops assistant text/reasoning parts whose text
++  // is empty (`part.text.length === 0 ? undefined : ...` then filters), so a
++  // message that holds only empty-text parts serializes to `parts: []` and the
++  // whole request 400s. The usual source is the empty "structural separator" text
++  // part that Anthropic adaptive-thinking turns persist between step-start
++  // boundaries (see message-v2.ts): replayed to a Gemini compaction model as a
++  // cross-model turn it has no signed reasoning to trigger " " padding, survives
++  // as text: "", and convertToModelMessages splits it into a lone empty step.
++  // Mirror the converter (drop empty text/reasoning) and drop newly-empty
++  // messages, exactly like the @ai-sdk/anthropic and @ai-sdk/amazon-bedrock
++  // blocks above. This is lossless for Gemini since the converter discards those
++  // parts regardless (empty reasoning is dropped even when it carries a
++  // thoughtSignature).
++  if (model.api.npm === "@ai-sdk/google" || model.api.npm === "@ai-sdk/google-vertex") {
++    msgs = msgs
++      .map((msg) => {
++        if (typeof msg.content === "string") {
++          if (msg.content === "") return undefined
++          return msg
++        }
++        if (!Array.isArray(msg.content)) return msg
++        const filtered = msg.content.filter((part) => {
++          if (part.type === "text" || part.type === "reasoning") {
++            return part.text.length > 0
++          }
++          return true
++        })
++        if (filtered.length === 0) return undefined
++        return { ...msg, content: filtered }
++      })
++      .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
++  }
++
+   if (model.api.id.includes("claude")) {
+     const scrub = (id: string) => id.replace(/[^a-zA-Z0-9_-]/g, "_")
+     msgs = msgs.map((msg) => {
+diff --git a/packages/opencode/test/provider/transform.test.ts b/packages/opencode/test/provider/transform.test.ts
+index 3815a4322..cb4e3cb1d 100644
+--- a/packages/opencode/test/provider/transform.test.ts
++++ b/packages/opencode/test/provider/transform.test.ts
+@@ -3960,3 +3960,80 @@ describe("ProviderTransform.providerOptions - ai-gateway-provider", () => {
+     expect(result).toEqual({ openaiCompatible: { reasoningEffort: "high" } })
+   })
+ })
++
++describe("ProviderTransform.message - gemini empty parts", () => {
++  const geminiModel = (npm = "@ai-sdk/google-vertex", providerID = "google-vertex") =>
++    ({
++      id: `${providerID}/gemini-3.5-flash`,
++      providerID,
++      api: { id: "gemini-3.5-flash", url: "https://example.com", npm },
++      name: "Gemini 3.5 Flash",
++      capabilities: {
++        temperature: true,
++        reasoning: true,
++        attachment: true,
++        toolcall: true,
++        input: { text: true, audio: false, image: true, video: false, pdf: true },
++        output: { text: true, audio: false, image: false, video: false, pdf: false },
++        interleaved: false,
++      },
++      cost: { input: 1, output: 1, cache: { read: 0, write: 0 } },
++      limit: { context: 1_000_000, output: 65_536 },
++      status: "active",
++      options: {},
++      headers: {},
++    }) as any
++
++  const summarize = (result: any[]) =>
++    result.map((m) => ({
++      role: m.role,
++      types: Array.isArray(m.content) ? m.content.map((p: any) => p.type) : "string",
++    }))
++
++  test("drops assistant messages/steps that would serialize to empty Gemini parts", () => {
++    const result = ProviderTransform.message(
++      [
++        { role: "user", content: [{ type: "text", text: "hi" }] },
++        // Empty "structural separator" step (Anthropic adaptive-thinking residue).
++        { role: "assistant", content: [{ type: "text", text: "" }] },
++        // Genuinely empty content array.
++        { role: "assistant", content: [] },
++        // Only empty reasoning + empty text.
++        {
++          role: "assistant",
++          content: [
++            { type: "reasoning", text: "" },
++            { type: "text", text: "" },
++          ],
++        },
++        // Mixed: empty text is stripped but the tool-call keeps the message alive.
++        {
++          role: "assistant",
++          content: [
++            { type: "text", text: "" },
++            { type: "tool-call", toolCallId: "c1", toolName: "bash", input: {} },
++          ],
++        },
++        { role: "assistant", content: [{ type: "text", text: "done" }] },
++      ] as any,
++      geminiModel(),
++      {},
++    )
++
++    expect(summarize(result)).toEqual([
++      { role: "user", types: ["text"] },
++      { role: "assistant", types: ["tool-call"] },
++      { role: "assistant", types: ["text"] },
++    ])
++  })
++
++  test("leaves empty assistant content untouched for non-Gemini providers", () => {
++    const result = ProviderTransform.message(
++      [{ role: "assistant", content: [{ type: "text", text: "" }] }] as any,
++      geminiModel("@ai-sdk/openai-compatible", "openai-compatible"),
++      {},
++    )
++    expect(result.length).toBe(1)
++    expect((result[0].content as any[]).length).toBe(1)
++  })
++})
