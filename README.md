@@ -1,6 +1,6 @@
 # opencode-patched
 
-**OpenCode v1.15.10 with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
+**OpenCode v1.15.12 with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
 
 This repository layers prompt caching and local patches into a single OpenCode binary, built automatically for 4 platforms.
 
@@ -18,7 +18,7 @@ Captured from PR head `810aaffd44472f6e6d1accff53048f9e2009e41c`.
 
 ### 3. Cache-Aligned Compaction ([PR #25100](https://github.com/anomalyco/opencode/pull/25100))
 
-Stored locally as `patches/cache-aligned-compaction.patch`. Rationale: compaction request construction was provider-independent uncached work; aligning compaction with normal prompt-loop context lets future compactions reuse prefix cache where provider/model conditions allow. Applied after `prompt-loop-cache.patch` and before existing vim/tool/MCP/eager/prefill patches.
+Stored locally as `patches/cache-aligned-compaction.patch`. Rationale: compaction request construction was provider-independent uncached work; aligning compaction with normal prompt-loop context lets future compactions reuse prefix cache where provider/model conditions allow. Applied after `prompt-loop-cache.patch` and before existing vim/tool/MCP/eager patches.
 
 Captured from PR #25100 head `972380a75249b01a424010e8bc0453e15a3a14c2`.
 
@@ -62,16 +62,11 @@ tools.0.custom.eager_input_streaming: Extra inputs are not permitted
 
 Upstream only fixes this for github-copilot via the `chat.params` plugin hook (gated on `providerID`), leaving Vertex/Bedrock/etc. broken. PRs that proposed a generalized fix ([#23766](https://github.com/anomalyco/opencode/pull/23766), [#23542](https://github.com/anomalyco/opencode/pull/23542)) were rejected by upstream maintainers. This patch defaults `toolStreaming = false` in `ProviderTransform.options()` whenever the model uses `@ai-sdk/anthropic` or `@ai-sdk/google-vertex/anthropic`. Users can opt back in by setting `toolStreaming: true` in their model or agent options.
 
-### 9. Prefill race fix
-
-Stored locally as `patches/prefill-fix.patch`. Closes a multi-cwd race where concurrent `prompt_async` requests for the same session, arriving with different `x-opencode-directory` headers, would bind to different per-directory InstanceStore entries and bypass the per-session busy guard. The fix routes session-bound requests through the session's canonical stored `directory` rather than the request-supplied header.
-
-See `docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md` for the original v1.15.0 redesign rationale.
-
 ## DROPPED patches (sunset history)
 
 - **bus-eager-subscribe.patch (PR #27959)** — DROPPED on 2026-05-25 when this repo cut over from v1.15.0 to v1.15.10. PR #27959 (`fix(bus): acquire PubSub subscription eagerly`) was merged upstream on 2026-05-18 and shipped in v1.15.5. Any opencode release >= v1.15.5 contains the fix natively.
 - **Bus instance context fix (PR #28051)** — never had its own patch in this repo, but the closely-related bug it fixes (sync events publishing on the wrong bus runtime, partitioning `message.updated` from `session.idle` across plugin instances) was the root cause of dropped Telegram stop notifications throughout April/May 2026. The load-bearing fix is actually PR #27825 (`fix(sync): publish events on injected project bus`), with #27757, #28051, and #28187 as supporting changes. ALL of these are in v1.15.5+. See `docs/plans/2026-05-22-bus-fix-investigation-HANDOFF.md` and `docs/plans/2026-05-25-28051-verification-report.md` in the pigeon repo for the full investigation chain.
+- **prefill-fix.patch** — DROPPED on 2026-05-28 when this repo cut over to v1.15.12. v1.15.12's release notes line *"Used the persisted session directory for existing-session requests"* corresponds to an upstream implementation of the same fix in `packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts`: `planRequest`'s `Local` plan construction now does `directory: session?.directory || defaultDirectory(request, url)`, which closes the multi-cwd race our patch did by routing session-bound requests to the session's canonical directory. Upstream's implementation collapses the choice into the existing `directory` field rather than threading our richer `sessionDirectory` value through `RequestPlan.Local` + `WorkspaceRouteContext` + `InstanceContextMiddleware`, but the net behavior matches. See `docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md` for the original v1.15.0 redesign and `docs/plans/2026-04-21-opencode-prefill-fix-design.md` (workstation repo) for the root-cause analysis.
 
 ## Installation
 
@@ -122,7 +117,7 @@ Timing Chain (every 8 hours):
       |-> builds v{VER}-cached        -- applies caching patch, publishes
 
 :01  opencode-patched/sync-cached     -- detects new -cached release
-        |-> builds v{VER}-patched       -- applies caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + eager-input-streaming + prefill-fix patches, publishes
+        |-> builds v{VER}-patched       -- applies caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + eager-input-streaming + instance-state-partition patches, publishes
 :01  opencode-patched/sync-vim-pr     -- checks PR #12679 for changes
 :01  opencode-patched/sync-tool-fix-pr -- checks PR #16751 for changes
 
@@ -133,7 +128,7 @@ Timing Chain (every 8 hours):
 
 1. Clone upstream OpenCode at the release tag
 2. Fetch `caching.patch` from [opencode-cached](https://github.com/johnnymo87/opencode-cached) (always latest from `main`)
-3. Apply `caching.patch`, then local `prompt-loop-cache.patch`, then `cache-aligned-compaction.patch`, then `gemini-empty-parts.patch`, then `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`, then `prefill-fix.patch`
+3. Apply `caching.patch`, then local `prompt-loop-cache.patch`, then `cache-aligned-compaction.patch`, then `gemini-empty-parts.patch`, then `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`, then `instance-state-partition.patch`
 4. Build with Bun for 4 platforms (linux/darwin x arm64/x64)
 5. Publish release as `v{VERSION}-patched`
 

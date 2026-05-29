@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix + instance-state-partition
+# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + instance-state-partition
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Fetches caching.patch from opencode-cached (never duplicated here),
 # then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
 # vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch,
-# prefill-fix.patch, and instance-state-partition.patch on top.
+# and instance-state-partition.patch on top.
 #
-# TARGET UPSTREAM: opencode v1.15.10
-# Patches were rebased from v1.15.0 to v1.15.10 on 2026-05-25.
+# TARGET UPSTREAM: opencode v1.15.12
+# Patches were rebased from v1.15.10 to v1.15.12 on 2026-05-28.
 # bus-eager-subscribe.patch (PR #27959) and bus instance context fix (PR #28051)
 # were DROPPED because they are both upstream-merged in v1.15.5+.
+# prefill-fix.patch was DROPPED on 2026-05-28 when this repo cut over to v1.15.12,
+# because that release ships an equivalent upstream fix at workspace-routing.ts
+# (release-notes line: "Used the persisted session directory for existing-session requests"):
+# `directory: session?.directory || defaultDirectory(request, url)` in planRequest's
+# Local plan construction closes the same multi-cwd race our patch did, via a smaller
+# (collapsed-into-existing-field) implementation rather than threading a new
+# sessionDirectory through RequestPlan.Local + WorkspaceRouteContext.
 # instance-state-partition.patch (one-line server.ts memoMap fix + InstanceBootstrap
 # refactor) is staged here for the upstream PR; sunset signal is the anomalyco/opencode
 # PR being merged (tracked in check-sunset.yml).
@@ -33,7 +40,6 @@ VIM_PATCH="$SCRIPT_DIR/vim.patch"
 TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
 EAGER_INPUT_STREAMING_PATCH="$SCRIPT_DIR/eager-input-streaming.patch"
-PREFILL_FIX_PATCH="$SCRIPT_DIR/prefill-fix.patch"
 INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
 CACHING_PATCH_URL="https://raw.githubusercontent.com/johnnymo87/opencode-cached/main/patches/caching.patch"
 
@@ -74,11 +80,6 @@ fi
 
 if [ ! -f "$EAGER_INPUT_STREAMING_PATCH" ]; then
   echo "Error: Eager input streaming patch not found: $EAGER_INPUT_STREAMING_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$PREFILL_FIX_PATCH" ]; then
-  echo "Error: Prefill fix patch not found: $PREFILL_FIX_PATCH"
   exit 1
 fi
 
@@ -271,28 +272,7 @@ fi
 git apply "$EAGER_INPUT_STREAMING_PATCH"
 echo "✓ Eager input streaming patch applied"
 
-# --- Patch 9: Prefill race fix (rebind session routes to session.directory) ---
-
-echo "Applying prefill-fix.patch..."
-if ! git apply --check "$PREFILL_FIX_PATCH" 2>/dev/null; then
-  echo ""
-  echo "❌ PREFILL FIX PATCH FAILED TO APPLY"
-  echo ""
-  echo "Attempting to apply for diagnostics..."
-  git apply "$PREFILL_FIX_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
-  echo "The prefill fix patch may need updating for this upstream version."
-  echo "Refs: workstation/docs/plans/2026-04-21-opencode-prefill-fix-design.md"
-  exit 1
-fi
-
-git apply "$PREFILL_FIX_PATCH"
-echo "✓ Prefill fix patch applied"
-
-# --- Patch 10: InstanceStore partition fix (one-line server.ts memoMap + InstanceBootstrap refactor) ---
+# --- Patch 9: InstanceStore partition fix (one-line server.ts memoMap + InstanceBootstrap refactor) ---
 
 echo "Applying instance-state-partition.patch..."
 if ! git apply --check "$INSTANCE_STATE_PARTITION_PATCH" 2>/dev/null; then
