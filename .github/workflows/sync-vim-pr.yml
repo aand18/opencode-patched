@@ -2,7 +2,7 @@ name: Sync Vim PR Changes
 
 on:
   schedule:
-    # Every 8 hours, same as sync-cached (runs in parallel)
+    # Every 8 hours, same as sync-upstream (runs in parallel)
     - cron: '0 1,9,17 * * *'
   workflow_dispatch:
 
@@ -88,7 +88,7 @@ jobs:
                  git push
                  \`\`\`
                - If no, close this issue with a note explaining why
-            3. Verify the updated patch still stacks cleanly with the caching patch
+            3. Verify the updated patch still stacks cleanly with the other local patches (run patches/apply.sh against a fresh upstream clone)
             4. Close this issue when done
 
             **PR**: https://github.com/anomalyco/opencode/pull/12679

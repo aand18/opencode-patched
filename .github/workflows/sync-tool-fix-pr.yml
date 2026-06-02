@@ -2,7 +2,7 @@ name: Sync Tool Fix PR Changes
 
 on:
   schedule:
-    # Every 8 hours, same as sync-cached and sync-vim-pr
+    # Every 8 hours, same as sync-upstream and sync-vim-pr
     - cron: '0 1,9,17 * * *'
   workflow_dispatch:
 
@@ -88,7 +88,7 @@ jobs:
                  git push
                  \`\`\`
                - If no, close this issue with a note explaining why
-            3. Verify the updated patch still stacks cleanly with the caching and vim patches
+            3. Verify the updated patch still stacks cleanly with the other local patches (run patches/apply.sh against a fresh upstream clone)
             4. Close this issue when done
 
             **PR**: https://github.com/anomalyco/opencode/pull/16751

@@ -1,28 +1,36 @@
 # opencode-patched
 
-**OpenCode v1.15.12 with [prompt caching](https://github.com/anomalyco/opencode/pull/5422) + [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541)**
+**OpenCode with [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [eager_input_streaming workaround](https://github.com/anomalyco/opencode/issues/23541) + [cache thinking-skip](https://github.com/anomalyco/opencode/issues/17883)**
 
-This repository layers prompt caching and local patches into a single OpenCode binary, built automatically for 4 platforms.
+This repository layers a small set of local patches onto upstream OpenCode and builds a single binary automatically for 4 platforms.
 
 ## Patches Included
 
-### 1. Prompt Caching Improvements ([PR #5422](https://github.com/anomalyco/opencode/pull/5422))
+> **Prompt caching is now upstream.** The big `caching.patch` (formerly fetched at
+> build time from [opencode-cached](https://github.com/johnnymo87/opencode-cached),
+> [PR #5422](https://github.com/anomalyco/opencode/pull/5422)) was **dropped on
+> 2026-06-02**. Upstream `applyCaching` already anchors the conversation cache
+> breakpoint on the moving tail (`non-system.slice(-2)`), so the fork patch was
+> redundant — and the fork's own unmerged variant had actually *introduced* an
+> anchor regression. The only behavior upstream lacks (not marking a trailing
+> reasoning/thinking block as the cache breakpoint) is preserved as the small local
+> `cache-thinking-skip.patch`, section 8 below. `opencode-cached` has been archived.
+> See `docs/plans/2026-06-02-paring-back-opencode-cached-caching.md` in the
+> workstation repo for the analysis.
 
-Fetched at build time from [opencode-cached](https://github.com/johnnymo87/opencode-cached). Adds provider-specific cache configuration for 19+ providers, reducing cache write costs by ~44% and effective costs by ~73%.
-
-### 2. Prompt-Loop Byte Identity ([PR #25367](https://github.com/anomalyco/opencode/pull/25367))
+### 1. Prompt-Loop Byte Identity ([PR #25367](https://github.com/anomalyco/opencode/pull/25367))
 
 Stored locally as `patches/prompt-loop-cache.patch`. Caches the conversation array across prompt-loop iterations so tool-call continuations preserve byte identity. This targets the flat-cache-read + growing-uncached-input pattern where repeated tool-loop calls keep paying full input price for the same growing tail.
 
 Captured from PR head `810aaffd44472f6e6d1accff53048f9e2009e41c`.
 
-### 3. Cache-Aligned Compaction ([PR #25100](https://github.com/anomalyco/opencode/pull/25100))
+### 2. Cache-Aligned Compaction ([PR #25100](https://github.com/anomalyco/opencode/pull/25100))
 
 Stored locally as `patches/cache-aligned-compaction.patch`. Rationale: compaction request construction was provider-independent uncached work; aligning compaction with normal prompt-loop context lets future compactions reuse prefix cache where provider/model conditions allow. Applied after `prompt-loop-cache.patch` and before existing vim/tool/MCP/eager patches.
 
 Captured from PR #25100 head `972380a75249b01a424010e8bc0453e15a3a14c2`.
 
-### 4. Gemini Empty Parts Fix ([PR #28669](https://github.com/anomalyco/opencode/pull/28669), [Issue #17519](https://github.com/anomalyco/opencode/issues/17519))
+### 3. Gemini Empty Parts Fix ([PR #28669](https://github.com/anomalyco/opencode/pull/28669), [Issue #17519](https://github.com/anomalyco/opencode/issues/17519))
 
 Stored locally as `patches/gemini-empty-parts.patch`. Vertex/Gemini rejects any
 `contents[]` entry with `parts: []` with `Unable to submit request because it must
@@ -51,7 +59,7 @@ paths**:
   compaction failure tracked in Issue #17519; the original `packages/llm` hunk
   alone never fixed it because Gemini doesn't use that path.
 
-### 5. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
+### 4. Vim Keybindings ([PR #12679](https://github.com/anomalyco/opencode/pull/12679))
 
 Stored locally as `patches/vim.patch`. Adds optional vim motions to the prompt input. Disabled by default -- enable with `tui.vim: true` or toggle from the command palette.
 
@@ -63,17 +71,17 @@ Supported motions:
 - Scrolling: `Ctrl+e/y/d/u/f/b`
 - `Enter` in normal mode submits
 
-### 6. Tool Use/Result Mismatch Fix ([PR #16751](https://github.com/anomalyco/opencode/pull/16751))
+### 5. Tool Use/Result Mismatch Fix ([PR #16751](https://github.com/anomalyco/opencode/pull/16751))
 
 Stored locally as `patches/tool-fix.patch`. Fixes the widespread `tool_use ids were found without tool_result blocks` error ([#16749](https://github.com/anomalyco/opencode/issues/16749)) that corrupts sessions when stream errors cause lost step boundaries. Injects synthetic step-start boundaries at message reconstruction time to prevent interleaved tool_use/text in assistant messages that the Anthropic API rejects.
 
-### 7. MCP Auto-Reconnect ([Issue #15247](https://github.com/anomalyco/opencode/issues/15247))
+### 6. MCP Auto-Reconnect ([Issue #15247](https://github.com/anomalyco/opencode/issues/15247))
 
 Stored locally as `patches/mcp-reconnect.patch`. Automatically reconnects remote MCP servers when the server restarts and the session becomes stale. Without this patch, `callTool` fails at the transport layer with "Session not found" / HTTP 404 errors, requiring a manual MCP toggle (ctrl+p) or full OpenCode restart.
 
 The patch wraps remote MCP tool execution with a try/catch that detects transport-level errors (stale sessions, connection refused, etc.), closes the stale client, creates a fresh transport + client, refreshes tool definitions, and retries the call once.
 
-### 8. Eager Input Streaming Workaround ([Issue #23541](https://github.com/anomalyco/opencode/issues/23541), [#23257](https://github.com/anomalyco/opencode/issues/23257), [#23767](https://github.com/anomalyco/opencode/issues/23767))
+### 7. Eager Input Streaming Workaround ([Issue #23541](https://github.com/anomalyco/opencode/issues/23541), [#23257](https://github.com/anomalyco/opencode/issues/23257), [#23767](https://github.com/anomalyco/opencode/issues/23767))
 
 Stored locally as `patches/eager-input-streaming.patch`. Disables `toolStreaming` for all `@ai-sdk/anthropic`-backed providers (including `@ai-sdk/google-vertex/anthropic`).
 
@@ -85,8 +93,25 @@ tools.0.custom.eager_input_streaming: Extra inputs are not permitted
 
 Upstream only fixes this for github-copilot via the `chat.params` plugin hook (gated on `providerID`), leaving Vertex/Bedrock/etc. broken. PRs that proposed a generalized fix ([#23766](https://github.com/anomalyco/opencode/pull/23766), [#23542](https://github.com/anomalyco/opencode/pull/23542)) were rejected by upstream maintainers. This patch defaults `toolStreaming = false` in `ProviderTransform.options()` whenever the model uses `@ai-sdk/anthropic` or `@ai-sdk/google-vertex/anthropic`. Users can opt back in by setting `toolStreaming: true` in their model or agent options.
 
+### 8. Cache Thinking-Skip ([Issue #17883](https://github.com/anomalyco/opencode/issues/17883))
+
+Stored locally as `patches/cache-thinking-skip.patch`. This is the **only
+caching-related patch** that survived the 2026-06-02 drop of the big `caching.patch`
+(see the note at the top of this section). Upstream `applyCaching` marks the
+conversation cache breakpoint on `msg.content[msg.content.length - 1]` — blindly the
+last content block. When the last block is a `reasoning`/`redacted-reasoning`
+(thinking) block, Anthropic rejects the request with HTTP 400 because `cache_control`
+isn't allowed on thinking blocks. This bites whenever adaptive reasoning is on (Opus
+4.7+/4.8). The patch makes the breakpoint scan backwards to the last *cacheable*
+content block instead, skipping trailing reasoning and tool-approval pseudo-blocks.
+
+It's a ~15-line change to `applyCaching` in `provider/transform.ts`. Tracked upstream
+as Issue [#17883](https://github.com/anomalyco/opencode/issues/17883); when upstream
+fixes it, this patch can be dropped.
+
 ## DROPPED patches (sunset history)
 
+- **caching.patch (PR #5422, via opencode-cached)** — DROPPED on 2026-06-02. Upstream `applyCaching` already implements the moving-tail conversation anchor (`non-system.slice(-2)`) that was the ~$500/day win, so the ~1100-line fork patch was redundant; the fork's own unmerged variant ([PR #5422](https://github.com/anomalyco/opencode/pull/5422)) had even *introduced* a stuck-anchor regression. A/B testing confirmed upstream matches the fork on Vertex (0% uncached input, low cache-write, no tool-prefix busting), so `sortTools` + the dedicated tool breakpoint were not load-bearing for our toolset, and the 1h-TTL tiering was marginal (~$27/day) on a workload that is 92–96% sub-5-minute turns. The single behavior worth keeping — skipping reasoning/thinking blocks at the cache breakpoint — survives as `cache-thinking-skip.patch` (section 8). The sibling repo `opencode-cached` was archived. Full analysis: `docs/plans/2026-06-02-paring-back-opencode-cached-caching.md` (workstation repo).
 - **bus-eager-subscribe.patch (PR #27959)** — DROPPED on 2026-05-25 when this repo cut over from v1.15.0 to v1.15.10. PR #27959 (`fix(bus): acquire PubSub subscription eagerly`) was merged upstream on 2026-05-18 and shipped in v1.15.5. Any opencode release >= v1.15.5 contains the fix natively.
 - **Bus instance context fix (PR #28051)** — never had its own patch in this repo, but the closely-related bug it fixes (sync events publishing on the wrong bus runtime, partitioning `message.updated` from `session.idle` across plugin instances) was the root cause of dropped Telegram stop notifications throughout April/May 2026. The load-bearing fix is actually PR #27825 (`fix(sync): publish events on injected project bus`), with #27757, #28051, and #28187 as supporting changes. ALL of these are in v1.15.5+. See `docs/plans/2026-05-22-bus-fix-investigation-HANDOFF.md` and `docs/plans/2026-05-25-28051-verification-report.md` in the pigeon repo for the full investigation chain.
 - **prefill-fix.patch** — DROPPED on 2026-05-28 when this repo cut over to v1.15.12. v1.15.12's release notes line *"Used the persisted session directory for existing-session requests"* corresponds to an upstream implementation of the same fix in `packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts`: `planRequest`'s `Local` plan construction now does `directory: session?.directory || defaultDirectory(request, url)`, which closes the multi-cwd race our patch did by routing session-bound requests to the session's canonical directory. Upstream's implementation collapses the choice into the existing `directory` field rather than threading our richer `sessionDirectory` value through `RequestPlan.Local` + `WorkspaceRouteContext` + `InstanceContextMiddleware`, but the net behavior matches. See `docs/plans/2026-05-15-prefill-fix-redesign-{plan,question,answer}.md` for the original v1.15.0 redesign and `docs/plans/2026-04-21-opencode-prefill-fix-design.md` (workstation repo) for the root-cause analysis.
@@ -136,38 +161,42 @@ See the [workstation repo](https://github.com/johnnymo87/workstation) for Nix in
 ```
 Timing Chain (every 8 hours):
 
-:00  opencode-cached/sync-upstream    -- detects new upstream release
-      |-> builds v{VER}-cached        -- applies caching patch, publishes
+(upstream anomalyco/opencode publishes a release)
 
-:01  opencode-patched/sync-cached     -- detects new -cached release
-        |-> builds v{VER}-patched       -- applies caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + eager-input-streaming + instance-state-partition patches, publishes
+:01  opencode-patched/sync-upstream   -- detects new upstream release directly
+        |-> builds v{VER}-patched       -- applies prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + eager-input-streaming + instance-state-partition + cache-thinking-skip patches, publishes
 :01  opencode-patched/sync-vim-pr     -- checks PR #12679 for changes
 :01  opencode-patched/sync-tool-fix-pr -- checks PR #16751 for changes
 
 :02  workstation/update-opencode-patched -- updates Nix config, opens PR
 ```
 
+Until 2026-06-02 this chain had an extra upstream hop: `opencode-cached/sync-upstream`
+built a `v{VER}-cached` release (applying the big `caching.patch`), and
+`opencode-patched/sync-cached` watched *that*. With `caching.patch` dropped and
+`opencode-cached` archived, `sync-cached.yml` was replaced by `sync-upstream.yml`,
+which watches `anomalyco/opencode` releases directly.
+
 ### Build Process
 
 1. Clone upstream OpenCode at the release tag
-2. Fetch `caching.patch` from [opencode-cached](https://github.com/johnnymo87/opencode-cached) (always latest from `main`)
-3. Apply `caching.patch`, then local `prompt-loop-cache.patch`, then `cache-aligned-compaction.patch`, then `gemini-empty-parts.patch`, then `vim.patch`, then `tool-fix.patch`, then `mcp-reconnect.patch`, then `eager-input-streaming.patch`, then `instance-state-partition.patch`
-4. Build with Bun for 4 platforms (linux/darwin x arm64/x64)
-5. Publish release as `v{VERSION}-patched`
+2. Apply the local patches in order: `prompt-loop-cache.patch`, `cache-aligned-compaction.patch`, `gemini-empty-parts.patch`, `vim.patch`, `tool-fix.patch`, `mcp-reconnect.patch`, `eager-input-streaming.patch`, `instance-state-partition.patch`, `cache-thinking-skip.patch` (see `patches/apply.sh`)
+3. Build with Bun for 4 platforms (linux/darwin x arm64/x64)
+4. Publish release as `v{VERSION}-patched`
 
 ### Patch Independence
 
 The patches modify mostly different areas of the codebase:
-- **Caching**: `config/agent.ts`, `config/provider.ts`, `provider/config.ts`, `provider/transform.ts`, `session/prompt.ts`
 - **Prompt-loop cache**: `app/vite.js`, `session/prompt.ts`
 - **Cache-aligned compaction**: `session/prompt.ts`
 - **Gemini empty parts**: `packages/llm/src/protocols/gemini.ts`, `packages/llm/test/provider/gemini.test.ts`, `packages/opencode/src/provider/transform.ts`, `packages/opencode/test/provider/transform.test.ts`
 - **Vim**: `cli/cmd/tui/component/vim/*`, `cli/cmd/tui/component/prompt/index.tsx`, `cli/cmd/tui/app.tsx`, `cli/cmd/tui/config/tui-schema.ts`
 - **Tool fix**: `session/message-v2.ts`, `test/session/message-v2.test.ts`
 - **MCP reconnect**: `mcp/index.ts`
-- **Eager input streaming**: `provider/transform.ts` (different region from caching -- inserts a single `toolStreaming = false` block at the end of `options()`)
+- **Eager input streaming**: `provider/transform.ts` (inserts a single `toolStreaming = false` block at the end of `options()`)
+- **Cache thinking-skip**: `provider/transform.ts` (the `applyCaching` breakpoint loop)
 
-The files touched by more than one patch are `provider/transform.ts` (caching + eager-input-streaming) and `session/prompt.ts` (caching + prompt-loop-cache + cache-aligned-compaction). The overlapping patches modify disjoint regions and apply cleanly in the documented order.
+The file touched by more than one patch is `provider/transform.ts` (gemini-empty-parts in `normalizeMessages()`, eager-input-streaming in `options()`, cache-thinking-skip in `applyCaching()`) and `session/prompt.ts` (prompt-loop-cache + cache-aligned-compaction). The overlapping patches modify disjoint regions and apply cleanly in the documented order.
 
 ## Patch Ownership
 
@@ -175,7 +204,6 @@ Each patch is owned by a specific repo. Do not edit a patch in the wrong repo.
 
 | Patch | Owned by | Upstream PR guide |
 |-------|----------|-------------------|
-| `caching.patch` | [opencode-cached](https://github.com/johnnymo87/opencode-cached) (`patches/caching.patch`) | PR #5422 |
 | `prompt-loop-cache.patch` | **this repo** (`patches/prompt-loop-cache.patch`) | PR #25367 |
 | `cache-aligned-compaction.patch` | **this repo** (`patches/cache-aligned-compaction.patch`) | PR #25100 |
 | `gemini-empty-parts.patch` | **this repo** (`patches/gemini-empty-parts.patch`) | PR #28669 |
@@ -183,17 +211,29 @@ Each patch is owned by a specific repo. Do not edit a patch in the wrong repo.
 | `tool-fix.patch` | **this repo** (`patches/tool-fix.patch`) | PR #16751 |
 | `mcp-reconnect.patch` | **this repo** (`patches/mcp-reconnect.patch`) | Issue #15247 |
 | `eager-input-streaming.patch` | **this repo** (`patches/eager-input-streaming.patch`) | Issue #23541 / PR #23766 (rejected upstream) |
+| `instance-state-partition.patch` | **this repo** (`patches/instance-state-partition.patch`) | local (upstream PR pending burn-in) |
+| `cache-thinking-skip.patch` | **this repo** (`patches/cache-thinking-skip.patch`) | Issue #17883 |
 
-When an upstream PR is merged, the corresponding patch can be dropped. `caching.patch` is
-managed in the sibling repo `~/projects/opencode-cached`; edits belong there, not here.
+When an upstream PR is merged, the corresponding patch can be dropped. (The big
+`caching.patch` formerly lived in the sibling repo `opencode-cached`; it was dropped
+and that repo archived on 2026-06-02 — see the note at the top of "Patches Included".)
 
 ## Maintenance
 
-### When the Caching Patch Breaks (Build Failure)
+### When the Cache Thinking-Skip Patch Breaks (Build Failure)
 
-This is handled by [opencode-cached](https://github.com/johnnymo87/opencode-cached). If the caching patch fails on a new upstream version, opencode-cached won't release, and this repo won't attempt a build.
+The build fails and creates a GitHub issue automatically. This blocks publication.
 
-To refresh: edit `~/projects/opencode-cached/patches/caching.patch` (not this repo).
+The patch targets `applyCaching` in `packages/opencode/src/provider/transform.ts`. If
+upstream refactors that function, re-derive the hunk: the patch replaces the blind
+`const lastContent = msg.content[msg.content.length - 1]` breakpoint pick with a
+backward scan to the last *cacheable* block (skipping `reasoning`,
+`redacted-reasoning`, and `tool-approval-*` blocks).
+
+1. Check whether upstream has fixed [Issue #17883](https://github.com/anomalyco/opencode/issues/17883); if yes, remove `patches/cache-thinking-skip.patch` and update `patches/apply.sh`
+2. If absent, re-derive the backward-scan hunk against the new `applyCaching`
+3. Review, commit, push
+4. Re-trigger: `gh workflow run build-release.yml --field version=X.Y.Z`
 
 ### When the Prompt-Loop Cache Patch Breaks (Build Failure)
 
@@ -311,15 +351,13 @@ The build fails and creates a GitHub issue automatically. This blocks publicatio
 
 ### Sunset Criteria
 
-Monthly automated check (`check-sunset.yml`) monitors all upstream PRs:
-- **Any PR merged**: Drop the corresponding patch from `apply.sh`
-- **All merged**: Switch workstation to upstream OpenCode, archive this repo and opencode-cached
+Monthly automated check (`check-sunset.yml`) monitors all upstream PRs/issues:
+- **Any PR merged (or tracked issue closed)**: Drop the corresponding patch from `apply.sh`
+- **All merged**: Switch workstation to upstream OpenCode, archive this repo (`opencode-cached` was already archived 2026-06-02)
 
 ## Credits
 
 - **OpenCode**: [anomalyco/opencode](https://github.com/anomalyco/opencode)
-- **Caching PR**: [PR #5422](https://github.com/anomalyco/opencode/pull/5422) by [@ormandj](https://github.com/ormandj)
-- **Caching builds**: [opencode-cached](https://github.com/johnnymo87/opencode-cached)
 - **Prompt-loop cache PR**: [PR #25367](https://github.com/anomalyco/opencode/pull/25367) by [@BYK](https://github.com/BYK)
 - **Cache-aligned compaction PR**: [PR #25100](https://github.com/anomalyco/opencode/pull/25100)
 - **Gemini empty parts PR**: [PR #28669](https://github.com/anomalyco/opencode/pull/28669)
@@ -327,6 +365,7 @@ Monthly automated check (`check-sunset.yml`) monitors all upstream PRs:
 - **Tool fix PR**: [PR #16751](https://github.com/anomalyco/opencode/pull/16751) by [@altendky](https://github.com/altendky)
 - **MCP reconnect**: [Issue #15247](https://github.com/anomalyco/opencode/issues/15247) -- original patch
 - **Eager input streaming workaround**: [Issue #23541](https://github.com/anomalyco/opencode/issues/23541) -- original patch (upstream fixes rejected)
+- **Cache thinking-skip**: [Issue #17883](https://github.com/anomalyco/opencode/issues/17883) -- original patch (formerly part of the now-dropped `caching.patch` / [PR #5422](https://github.com/anomalyco/opencode/pull/5422) by [@ormandj](https://github.com/ormandj))
 
 ## License
 
