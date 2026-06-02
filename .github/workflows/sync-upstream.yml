@@ -1,0 +1,86 @@
+name: Sync upstream opencode Releases
+
+# Watches anomalyco/opencode releases directly and triggers a patched build for
+# any new upstream version we don't yet have a v<version>-patched release for.
+#
+# History: this used to be sync-cached.yml, which watched johnnymo87/opencode-cached
+# releases (the old opencode-cached -> opencode-patched chain). As of 2026-06-02 the
+# caching.patch was dropped (upstream applyCaching is sufficient; see
+# patches/apply.sh + workstation docs/plans/2026-06-02-paring-back-opencode-cached-caching.md),
+# opencode-cached was archived, and this workflow was repointed at upstream directly.
+
+on:
+  schedule:
+    # Every 8 hours.
+    - cron: '0 1,9,17 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Specific upstream opencode tag to build (e.g., v1.15.13)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  check-new-release:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new upstream opencode release
+        id: check
+        run: |
+          # Get latest upstream opencode release (latest = newest non-draft,
+          # non-prerelease).
+          if [ -n "${{ inputs.upstream_tag }}" ]; then
+            UPSTREAM_TAG="${{ inputs.upstream_tag }}"
+            echo "Using manually specified tag: $UPSTREAM_TAG"
+          else
+            UPSTREAM_TAG=$(gh api repos/anomalyco/opencode/releases/latest --jq .tag_name)
+            echo "Latest upstream opencode tag: $UPSTREAM_TAG"
+          fi
+
+          # Extract version (strip 'v' prefix)
+          VERSION=$(echo "$UPSTREAM_TAG" | sed 's/^v//')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Check if we already have a patched release for this version. We match
+          # the base tag AND any revisioned re-release (v<version>-patched.N), so a
+          # manual rev bump doesn't get clobbered by an automated base build.
+          if gh release list --repo ${{ github.repository }} --limit 100 \
+               | grep -qE "v${VERSION}-patched(\.[0-9]+)?\b"; then
+            echo "A v${VERSION}-patched release already exists, skipping"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "No v${VERSION}-patched release exists, will build"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  trigger-build:
+    needs: check-new-release
+    if: needs.check-new-release.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger build workflow
+        run: |
+          gh workflow run build-release.yml \
+            --repo ${{ github.repository }} \
+            --ref main \
+            --field version=${{ needs.check-new-release.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Log trigger
+        run: |
+          echo "Triggered build for upstream version ${{ needs.check-new-release.outputs.version }}"

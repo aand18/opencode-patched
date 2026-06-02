@@ -14,12 +14,19 @@ jobs:
   check-upstream:
     runs-on: ubuntu-latest
     steps:
-      - name: Check PR #5422 (caching) status
-        id: check_caching_pr
+      - name: Check issue #17883 (cache thinking-skip) status
+        id: check_thinking_skip
         run: |
-          PR_STATE=$(gh pr view 5422 --repo anomalyco/opencode --json state --jq .state 2>/dev/null || echo "UNKNOWN")
-          echo "state=$PR_STATE" >> $GITHUB_OUTPUT
-          echo "Caching PR #5422: $PR_STATE"
+          # The lone caching-related local patch (cache-thinking-skip.patch) exists
+          # because upstream marks the cache breakpoint on content[length-1], which can
+          # land cache_control on a reasoning/thinking block -> Anthropic HTTP 400.
+          # Tracked upstream as issue #17883. When it's CLOSED, upstream likely fixed
+          # applyCaching and the patch can be dropped.
+          # (The big caching.patch / PR #5422 was dropped 2026-06-02 as redundant with
+          # upstream applyCaching; it is no longer monitored here.)
+          ISSUE_STATE=$(gh issue view 17883 --repo anomalyco/opencode --json state --jq .state 2>/dev/null || echo "UNKNOWN")
+          echo "state=$ISSUE_STATE" >> $GITHUB_OUTPUT
+          echo "Cache thinking-skip issue #17883: $ISSUE_STATE"
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -103,24 +110,24 @@ jobs:
       # The corresponding bus-eager-subscribe.patch was deleted from patches/.
 
       - name: Create sunset recommendation
-        if: steps.check_caching_pr.outputs.state == 'MERGED' || steps.check_vim_pr.outputs.state == 'MERGED' || steps.check_tool_fix_pr.outputs.state == 'MERGED' || steps.check_mcp_reconnect.outputs.state == 'CLOSED' || steps.check_opus47.outputs.state == 'MERGED' || steps.check_eager_input_streaming.outputs.state == 'MERGED' || steps.check_instance_state_partition.outputs.state == 'MERGED'
+        if: steps.check_thinking_skip.outputs.state == 'CLOSED' || steps.check_vim_pr.outputs.state == 'MERGED' || steps.check_tool_fix_pr.outputs.state == 'MERGED' || steps.check_mcp_reconnect.outputs.state == 'CLOSED' || steps.check_opus47.outputs.state == 'MERGED' || steps.check_eager_input_streaming.outputs.state == 'MERGED' || steps.check_instance_state_partition.outputs.state == 'MERGED'
         uses: actions/github-script@v7
         with:
           script: |
-            const cachingState = '${{ steps.check_caching_pr.outputs.state }}';
+            const thinkingSkipState = '${{ steps.check_thinking_skip.outputs.state }}';
             const vimState = '${{ steps.check_vim_pr.outputs.state }}';
             const toolFixState = '${{ steps.check_tool_fix_pr.outputs.state }}';
             const mcpReconnectState = '${{ steps.check_mcp_reconnect.outputs.state }}';
             const opus47State = '${{ steps.check_opus47.outputs.state }}';
             const eagerInputStreamingState = '${{ steps.check_eager_input_streaming.outputs.state }}';
             const instanceStatePartitionState = '${{ steps.check_instance_state_partition.outputs.state }}';
-            const allMerged = cachingState === 'MERGED' && vimState === 'MERGED' && toolFixState === 'MERGED' && mcpReconnectState === 'CLOSED' && opus47State === 'MERGED' && eagerInputStreamingState === 'MERGED' && instanceStatePartitionState === 'MERGED';
+            const allMerged = thinkingSkipState === 'CLOSED' && vimState === 'MERGED' && toolFixState === 'MERGED' && mcpReconnectState === 'CLOSED' && opus47State === 'MERGED' && eagerInputStreamingState === 'MERGED' && instanceStatePartitionState === 'MERGED';
 
             // Collect which PRs/issues are resolved
             const merged = [];
             const remaining = [];
-            if (cachingState === 'MERGED') merged.push('Caching PR #5422');
-            else remaining.push('Caching PR #5422');
+            if (thinkingSkipState === 'CLOSED') merged.push('Cache thinking-skip #17883');
+            else remaining.push('Cache thinking-skip #17883');
             if (vimState === 'MERGED') merged.push('Vim PR #12679');
             else remaining.push('Vim PR #12679');
             if (toolFixState === 'MERGED') merged.push('Tool fix PR #16751');
@@ -141,7 +148,7 @@ jobs:
               body = `
             ## All Patches Merged Upstream
 
-            - **Caching PR #5422**: MERGED
+            - **Cache thinking-skip #17883**: CLOSED
             - **Vim PR #12679**: MERGED
             - **Tool fix PR #16751**: MERGED
             - **MCP reconnect #15247**: CLOSED
@@ -155,15 +162,14 @@ jobs:
 
             1. Verify the latest upstream release includes all features
             2. Update [workstation](https://github.com/johnnymo87/workstation) to use upstream OpenCode directly
-            3. Archive this repository
-            4. Archive [opencode-cached](https://github.com/johnnymo87/opencode-cached) too
+            3. Archive this repository (opencode-cached was already archived 2026-06-02)
               `;
             } else {
               title = `${merged.join(', ')} merged - update patches`;
               body = `
             ## Upstream PRs Merged
 
-            - **Caching PR #5422**: ${cachingState}
+            - **Cache thinking-skip #17883**: ${thinkingSkipState}
             - **Vim PR #12679**: ${vimState}
             - **Tool fix PR #16751**: ${toolFixState}
             - **MCP reconnect #15247**: ${mcpReconnectState}
@@ -178,8 +184,7 @@ jobs:
 
             1. Remove the merged patch(es) from \`patches/apply.sh\`
             2. Keep applying the remaining patch(es)
-            3. If caching was merged, update \`sync-cached.yml\` to check upstream releases directly
-            4. If all remaining patches are also merged later, archive this repo
+            3. If all remaining patches are also merged later, archive this repo
               `;
             }
 
@@ -198,7 +203,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: existingIssue.number,
-                body: `Monthly check (${new Date().toISOString().split('T')[0]}): Caching PR: ${cachingState}, Vim PR: ${vimState}, Tool fix PR: ${toolFixState}, MCP reconnect: ${mcpReconnectState}, Opus 4.7: ${opus47State}, Eager input streaming: ${eagerInputStreamingState}, InstanceState partition: ${instanceStatePartitionState}`
+                body: `Monthly check (${new Date().toISOString().split('T')[0]}): Cache thinking-skip #17883: ${thinkingSkipState}, Vim PR: ${vimState}, Tool fix PR: ${toolFixState}, MCP reconnect: ${mcpReconnectState}, Opus 4.7: ${opus47State}, Eager input streaming: ${eagerInputStreamingState}, InstanceState partition: ${instanceStatePartitionState}`
               });
             } else {
               await github.rest.issues.create({
@@ -214,7 +219,7 @@ jobs:
       - name: Report status
         run: |
           echo "Monthly upstream check complete"
-          echo "Caching PR #5422: ${{ steps.check_caching_pr.outputs.state }}"
+          echo "Cache thinking-skip #17883: ${{ steps.check_thinking_skip.outputs.state }}"
           echo "Vim PR #12679: ${{ steps.check_vim_pr.outputs.state }}"
           echo "Tool fix PR #16751: ${{ steps.check_tool_fix_pr.outputs.state }}"
           echo "MCP reconnect #15247: ${{ steps.check_mcp_reconnect.outputs.state }}"
