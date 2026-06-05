@@ -1,8 +1,8 @@
 diff --git a/packages/opencode/src/effect/app-runtime.ts b/packages/opencode/src/effect/app-runtime.ts
-index 2bef35e..d873d79 100644
+index 3b34bcc..8cc2306 100644
 --- a/packages/opencode/src/effect/app-runtime.ts
 +++ b/packages/opencode/src/effect/app-runtime.ts
-@@ -40,6 +40,7 @@ import { Command } from "@/command"
+@@ -38,6 +38,7 @@ import { Command } from "@/command"
  import { Truncate } from "@/tool/truncate"
  import { ToolRegistry } from "@/tool/registry"
  import { Format } from "@/format"
@@ -10,10 +10,10 @@ index 2bef35e..d873d79 100644
  import { InstanceLayer } from "@/project/instance-layer"
  import { Project } from "@/project/project"
  import { Vcs } from "@/project/vcs"
-@@ -114,7 +115,15 @@ export const AppLayer = Layer.mergeAll(
-   SyncEvent.defaultLayer,
-   EventV2Bridge.defaultLayer,
-   DataMigration.defaultLayer,
+@@ -102,7 +103,15 @@ export const AppLayer = Layer.mergeAll(
+   Installation.defaultLayer,
+   ShareNext.defaultLayer,
+   SessionShare.defaultLayer,
 -).pipe(Layer.provideMerge(InstanceLayer.layer), Layer.provideMerge(Observability.layer))
 +).pipe(
 +  Layer.provideMerge(
@@ -52,10 +52,10 @@ index a7e2bfc..093fca8 100644
  
  export * as InstanceLayer from "./instance-layer"
 diff --git a/packages/opencode/src/server/routes/instance/httpapi/server.ts b/packages/opencode/src/server/routes/instance/httpapi/server.ts
-index 45a71a7..3c80a30 100644
+index 5c1945a..c9916bd 100644
 --- a/packages/opencode/src/server/routes/instance/httpapi/server.ts
 +++ b/packages/opencode/src/server/routes/instance/httpapi/server.ts
-@@ -26,6 +26,7 @@ import { LSP } from "@/lsp/lsp"
+@@ -23,6 +23,7 @@ import { LSP } from "@/lsp/lsp"
  import { MCP } from "@/mcp"
  import { Permission } from "@/permission"
  import { Installation } from "@/installation"
@@ -63,7 +63,7 @@ index 45a71a7..3c80a30 100644
  import { InstanceLayer } from "@/project/instance-layer"
  import { Plugin } from "@/plugin"
  import { Project } from "@/project/project"
-@@ -239,7 +240,12 @@ export function createRoutes(
+@@ -257,7 +258,12 @@ export function createRoutes(
        HttpServer.layerServices,
      ]),
      Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
@@ -99,7 +99,7 @@ index 9a448b7..e0d763a 100644
      Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
      Effect.map(
 diff --git a/packages/opencode/src/worktree/index.ts b/packages/opencode/src/worktree/index.ts
-index d9743e5..7b7ddc3 100644
+index b24c92a..78815b9 100644
 --- a/packages/opencode/src/worktree/index.ts
 +++ b/packages/opencode/src/worktree/index.ts
 @@ -1,4 +1,5 @@
@@ -108,7 +108,7 @@ index d9743e5..7b7ddc3 100644
  import { InstanceLayer } from "@/project/instance-layer"
  import { InstanceStore } from "@/project/instance-store"
  import { Project } from "@/project/project"
-@@ -615,6 +616,13 @@ export const appLayer = layer.pipe(
+@@ -640,6 +641,13 @@ export const appLayer = layer.pipe(
    Layer.provide(NodePath.layer),
  )
  
@@ -153,20 +153,20 @@ index c5b18cc..99b7566 100644
  // InstanceBootstrap must run before any code touches the instance —
  // originally tracked by PRs #25389 and #25449, now a permanent
 diff --git a/packages/opencode/test/provider/provider.test.ts b/packages/opencode/test/provider/provider.test.ts
-index 1ea2c82..93bcc14 100644
+index 6edfc97..9a96475 100644
 --- a/packages/opencode/test/provider/provider.test.ts
 +++ b/packages/opencode/test/provider/provider.test.ts
 @@ -16,7 +16,9 @@ import { Provider } from "@/provider/provider"
- import { ProviderID, ModelID } from "../../src/provider/schema"
+ 
  import { RuntimeFlags } from "@/effect/runtime-flags"
  import { Filesystem } from "@/util/filesystem"
 +import { InstanceBootstrap } from "@/project/bootstrap"
  import { InstanceLayer } from "@/project/instance-layer"
 +import { Project } from "@/project/project"
  import { testEffect } from "../lib/effect"
- 
- const originalEnv = new Map<string, string | undefined>()
-@@ -1635,7 +1637,15 @@ it.instance(
+ import { ProviderV2 } from "@opencode-ai/core/provider"
+ import { ModelV2 } from "@opencode-ai/core/model"
+@@ -1647,7 +1649,15 @@ it.instance(
  // scoped tmpdir + provideInstance pattern via it.effect.
  
  const provideMultiInstance = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
@@ -183,7 +183,7 @@ index 1ea2c82..93bcc14 100644
  
  it.effect("plugin config providers persist after instance dispose", () =>
    Effect.gen(function* () {
-@@ -1738,7 +1748,15 @@ it.effect("opencode loader keeps paid models when config apiKey is present", ()
+@@ -1750,7 +1760,15 @@ it.effect("opencode loader keeps paid models when config apiKey is present", ()
        Provider.use
          .list()
          .pipe(provideInstanceEffect(directory))
@@ -200,7 +200,7 @@ index 1ea2c82..93bcc14 100644
  
      const none = paid(yield* listIn(noneDir))
      const keyedCount = paid(yield* listIn(keyedDir))
-@@ -1757,7 +1775,15 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
+@@ -1769,7 +1787,15 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
        Provider.use
          .list()
          .pipe(provideInstanceEffect(directory))
@@ -218,10 +218,10 @@ index 1ea2c82..93bcc14 100644
      const none = paid(yield* listIn(noneDir))
  
 diff --git a/packages/opencode/test/server/httpapi-instance-context.test.ts b/packages/opencode/test/server/httpapi-instance-context.test.ts
-index c464c42..cfab987 100644
+index eec2f9f..e5db622 100644
 --- a/packages/opencode/test/server/httpapi-instance-context.test.ts
 +++ b/packages/opencode/test/server/httpapi-instance-context.test.ts
-@@ -11,6 +11,7 @@ import { WorkspaceID } from "../../src/control-plane/schema"
+@@ -11,6 +11,7 @@ import { WorkspaceV2 } from "@opencode-ai/core/workspace"
  import type { WorkspaceAdapter } from "../../src/control-plane/types"
  import { Workspace } from "../../src/control-plane/workspace"
  import { InstanceRef, WorkspaceRef } from "../../src/effect/instance-ref"

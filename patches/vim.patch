@@ -1,8 +1,8 @@
 diff --git a/packages/opencode/src/cli/cmd/tui/app.tsx b/packages/opencode/src/cli/cmd/tui/app.tsx
-index 530ba3ff2..ce066b418 100644
+index 0cb5a08..db298c5 100644
 --- a/packages/opencode/src/cli/cmd/tui/app.tsx
 +++ b/packages/opencode/src/cli/cmd/tui/app.tsx
-@@ -75,6 +75,7 @@ import {
+@@ -76,6 +76,7 @@ import {
    useBindings,
    useOpencodeKeymap,
  } from "./keymap"
@@ -10,7 +10,7 @@ index 530ba3ff2..ce066b418 100644
  
  import type { EventSource } from "./context/sdk"
  import { DialogVariant } from "./component/dialog-variant"
-@@ -318,6 +319,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
+@@ -421,6 +422,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
      .finally(() => {
        setReady(true)
      })
@@ -18,7 +18,7 @@ index 530ba3ff2..ce066b418 100644
  
    // Let selection copy/dismiss win ahead of normal bindings when the feature flag is on.
    const offSelectionKeys = keymap.intercept(
-@@ -763,6 +765,15 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
+@@ -883,6 +885,15 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
            dialog.clear()
          },
        },
@@ -35,22 +35,22 @@ index 530ba3ff2..ce066b418 100644
          name: "app.toggle.animations",
          title: kv.get("animations_enabled", true) ? "Disable animations" : "Enable animations",
 diff --git a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
-index e87035568..0f61d5bcc 100644
+index dc363a4..c7e43e9 100644
 --- a/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
 +++ b/packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx
-@@ -57,6 +57,11 @@ import {
- } from "../dialog-workspace-create"
- import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
- import { useArgs } from "@tui/context/args"
+@@ -58,6 +58,11 @@ import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, u
+ import { useTuiConfig } from "../../context/tui-config"
+ import { usePromptWorkspace } from "./workspace"
+ import { usePromptMove } from "./move"
 +import { useVimEnabled } from "../vim"
 +import { createVimState, type VimMode } from "../vim/vim-state"
 +import { createVimHandler } from "../vim/vim-handler"
 +import { vimScroll } from "../vim/vim-scroll"
 +import { useVimIndicator } from "../vim/vim-indicator"
- import { Flag } from "@opencode-ai/core/flag/flag"
- import { type WorkspaceStatus } from "../workspace-label"
- import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
-@@ -98,6 +103,7 @@ function randomIndex(count: number) {
+ 
+ export type PromptProps = {
+   sessionID?: string
+@@ -95,6 +100,7 @@ function randomIndex(count: number) {
    if (count <= 0) return 0
    return Math.floor(Math.random() * count)
  }
@@ -58,16 +58,15 @@ index e87035568..0f61d5bcc 100644
  
  function fadeColor(color: RGBA, alpha: number) {
    return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha)
-@@ -200,6 +206,8 @@ export function Prompt(props: PromptProps) {
+@@ -195,6 +201,7 @@ export function Prompt(props: PromptProps) {
    const [cursorVersion, setCursorVersion] = createSignal(0)
    const currentProviderLabel = createMemo(() => local.model.parsed().provider)
    const hasRightContent = createMemo(() => Boolean(props.right))
 +  const vimEnabled = useVimEnabled()
-+  const defaultWorkspaceID = createMemo(() => props.workspaceID ?? project.workspace.current())
  
-   function selectWorkspace(selection: WorkspaceSelection | undefined) {
-     setWorkspaceSelection(selection)
-@@ -324,6 +332,19 @@ export function Prompt(props: PromptProps) {
+   function promptModelWarning() {
+     toast.show({
+@@ -236,6 +243,19 @@ export function Prompt(props: PromptProps) {
      if (!props.disabled) input.cursorColor = theme.text
    })
  
@@ -87,7 +86,7 @@ index e87035568..0f61d5bcc 100644
    const lastUserMessage = createMemo(() => {
      if (!props.sessionID) return undefined
      const messages = sync.data.message[props.sessionID]
-@@ -367,6 +388,37 @@ export function Prompt(props: PromptProps) {
+@@ -279,6 +299,37 @@ export function Prompt(props: PromptProps) {
      extmarkToPartIndex: new Map(),
      interrupt: 0,
    })
@@ -125,7 +124,7 @@ index e87035568..0f61d5bcc 100644
  
    createEffect(
      on(
-@@ -468,9 +520,16 @@ export function Prompt(props: PromptProps) {
+@@ -380,9 +431,16 @@ export function Prompt(props: PromptProps) {
          run: () => {
            if (auto()?.visible) return
            if (!input.focused) return
@@ -142,7 +141,7 @@ index e87035568..0f61d5bcc 100644
              return
            }
            if (!props.sessionID) return
-@@ -695,6 +754,7 @@ export function Prompt(props: PromptProps) {
+@@ -616,6 +674,7 @@ export function Prompt(props: PromptProps) {
      if (!input || input.isDestroyed) return
      if (props.visible === false || dialog.stack.length > 0) {
        if (input.focused) input.blur()
@@ -150,7 +149,7 @@ index e87035568..0f61d5bcc 100644
        return
      }
  
-@@ -714,6 +774,18 @@ export function Prompt(props: PromptProps) {
+@@ -635,6 +694,18 @@ export function Prompt(props: PromptProps) {
      }
    })
  
@@ -169,7 +168,7 @@ index e87035568..0f61d5bcc 100644
    function restoreExtmarksFromParts(parts: PromptInfo["parts"]) {
      input.extmarks.clear()
      setStore("extmarkToPartIndex", new Map())
-@@ -903,7 +975,17 @@ export function Prompt(props: PromptProps) {
+@@ -824,7 +895,17 @@ export function Prompt(props: PromptProps) {
      return {
        target: inputTarget,
        enabled: inputTarget() !== undefined && store.mode === "shell",
@@ -188,7 +187,7 @@ index e87035568..0f61d5bcc 100644
      }
    })
  
-@@ -914,7 +996,17 @@ export function Prompt(props: PromptProps) {
+@@ -835,7 +916,17 @@ export function Prompt(props: PromptProps) {
          cursorVersion()
          return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
        })(),
@@ -207,7 +206,7 @@ index e87035568..0f61d5bcc 100644
      }
    })
  
-@@ -1195,6 +1287,7 @@ export function Prompt(props: PromptProps) {
+@@ -1109,6 +1200,7 @@ export function Prompt(props: PromptProps) {
          .catch(() => {})
        if (editorParts.length > 0) editor.markSelectionSent()
      }
@@ -215,7 +214,7 @@ index e87035568..0f61d5bcc 100644
      history.append({
        ...store.prompt,
        mode: currentMode,
-@@ -1495,17 +1588,14 @@ export function Prompt(props: PromptProps) {
+@@ -1392,17 +1484,14 @@ export function Prompt(props: PromptProps) {
                  setCursorVersion((value) => value + 1)
                }}
                onCursorChange={() => setCursorVersion((value) => value + 1)}
@@ -236,7 +235,7 @@ index e87035568..0f61d5bcc 100644
                onPaste={async (event: PasteEvent) => {
                  if (props.disabled) {
                    event.preventDefault()
-@@ -1619,6 +1709,11 @@ export function Prompt(props: PromptProps) {
+@@ -1516,6 +1605,11 @@ export function Prompt(props: PromptProps) {
            />
          </box>
          <box width="100%" flexDirection="row" justifyContent="space-between">
@@ -250,7 +249,7 @@ index e87035568..0f61d5bcc 100644
                <box
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/index.ts b/packages/opencode/src/cli/cmd/tui/component/vim/index.ts
 new file mode 100644
-index 000000000..453b03fa6
+index 0000000..453b03f
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/index.ts
 @@ -0,0 +1,14 @@
@@ -270,7 +269,7 @@ index 000000000..453b03fa6
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/vim-handler.ts b/packages/opencode/src/cli/cmd/tui/component/vim/vim-handler.ts
 new file mode 100644
-index 000000000..f4c594451
+index 0000000..f4c5944
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/vim-handler.ts
 @@ -0,0 +1,321 @@
@@ -597,7 +596,7 @@ index 000000000..f4c594451
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/vim-indicator.ts b/packages/opencode/src/cli/cmd/tui/component/vim/vim-indicator.ts
 new file mode 100644
-index 000000000..7e6ec7601
+index 0000000..7e6ec76
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/vim-indicator.ts
 @@ -0,0 +1,14 @@
@@ -617,7 +616,7 @@ index 000000000..7e6ec7601
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/vim-motion-jump.ts b/packages/opencode/src/cli/cmd/tui/component/vim/vim-motion-jump.ts
 new file mode 100644
-index 000000000..279fe9a6f
+index 0000000..279fe9a
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/vim-motion-jump.ts
 @@ -0,0 +1,32 @@
@@ -655,7 +654,7 @@ index 000000000..279fe9a6f
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/vim-motions.ts b/packages/opencode/src/cli/cmd/tui/component/vim/vim-motions.ts
 new file mode 100644
-index 000000000..c86a62bc2
+index 0000000..c86a62b
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/vim-motions.ts
 @@ -0,0 +1,254 @@
@@ -915,7 +914,7 @@ index 000000000..c86a62bc2
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/vim-scroll.ts b/packages/opencode/src/cli/cmd/tui/component/vim/vim-scroll.ts
 new file mode 100644
-index 000000000..e886584c9
+index 0000000..e886584
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/vim-scroll.ts
 @@ -0,0 +1,15 @@
@@ -936,7 +935,7 @@ index 000000000..e886584c9
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/component/vim/vim-state.ts b/packages/opencode/src/cli/cmd/tui/component/vim/vim-state.ts
 new file mode 100644
-index 000000000..d3f8ca5fa
+index 0000000..d3f8ca5
 --- /dev/null
 +++ b/packages/opencode/src/cli/cmd/tui/component/vim/vim-state.ts
 @@ -0,0 +1,41 @@
@@ -982,10 +981,10 @@ index 000000000..d3f8ca5fa
 +  }
 +}
 diff --git a/packages/opencode/src/cli/cmd/tui/config/tui-schema.ts b/packages/opencode/src/cli/cmd/tui/config/tui-schema.ts
-index 2c99f2a5e..fb22b2175 100644
+index da0a36a..8cd621b 100644
 --- a/packages/opencode/src/cli/cmd/tui/config/tui-schema.ts
 +++ b/packages/opencode/src/cli/cmd/tui/config/tui-schema.ts
-@@ -75,4 +75,5 @@ export const TuiInfo = Schema.Struct({
+@@ -85,4 +85,5 @@ export const TuiInfo = Schema.Struct({
    scroll_acceleration: Schema.optional(ScrollAcceleration),
    diff_style: Schema.optional(DiffStyle),
    mouse: Schema.optional(Schema.Boolean).annotate({ description: "Enable or disable mouse capture (default: true)" }),
@@ -993,7 +992,7 @@ index 2c99f2a5e..fb22b2175 100644
  })
 diff --git a/packages/opencode/test/cli/tui/vim-motions.test.ts b/packages/opencode/test/cli/tui/vim-motions.test.ts
 new file mode 100644
-index 000000000..4565b09ba
+index 0000000..4565b09
 --- /dev/null
 +++ b/packages/opencode/test/cli/tui/vim-motions.test.ts
 @@ -0,0 +1,776 @@
@@ -1773,6 +1772,3 @@ index 000000000..4565b09ba
 +    expect(vimScroll(createEvent("b", { ctrl: false }).event)).toBe(undefined)
 +  })
 +})
--- 
-2.51.2
-

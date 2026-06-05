@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + instance-state-partition + cache-thinking-skip
+# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + instance-state-partition + cache-thinking-skip
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
-# vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch,
+# vim.patch, tool-fix.patch, mcp-reconnect.patch,
 # instance-state-partition.patch, and cache-thinking-skip.patch.
 #
 # NOTE (2026-06-02): the big caching.patch (formerly fetched from opencode-cached,
@@ -17,8 +17,16 @@
 # which is preserved here as the small local cache-thinking-skip.patch.
 # See workstation docs/plans/2026-06-02-paring-back-opencode-cached-caching.md.
 #
-# TARGET UPSTREAM: opencode v1.15.12
-# Patches were rebased from v1.15.10 to v1.15.12 on 2026-05-28.
+# TARGET UPSTREAM: opencode v1.16.0
+# Patches were rebased from v1.15.13 to v1.16.0 on 2026-06-05 (the v1/v2 namespace
+# migration: MessageV2 types -> SessionV1, Bus -> EventV2Bridge/events,
+# AppFileSystem -> FSUtil, ProviderID/ModelID -> ProviderV2.ID/ModelV2.ID, plus
+# prompt/index.tsx + AppLayer restructures). See
+# docs/plans/2026-06-05-refresh-patch-stack-for-v1.16.0.md.
+# eager-input-streaming.patch was DROPPED on 2026-06-05: v1.16.0's options()
+# (provider/transform.ts) now sets toolStreaming=false for
+# @ai-sdk/google-vertex/anthropic and non-claude @ai-sdk/anthropic upstream, which
+# fully covers our usage; the patch is redundant.
 # bus-eager-subscribe.patch (PR #27959) and bus instance context fix (PR #28051)
 # were DROPPED because they are both upstream-merged in v1.15.5+.
 # prefill-fix.patch was DROPPED on 2026-05-28 when this repo cut over to v1.15.12,
@@ -48,7 +56,6 @@ GEMINI_EMPTY_PARTS_PATCH="$SCRIPT_DIR/gemini-empty-parts.patch"
 VIM_PATCH="$SCRIPT_DIR/vim.patch"
 TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
-EAGER_INPUT_STREAMING_PATCH="$SCRIPT_DIR/eager-input-streaming.patch"
 INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
 CACHE_THINKING_SKIP_PATCH="$SCRIPT_DIR/cache-thinking-skip.patch"
 
@@ -84,11 +91,6 @@ fi
 
 if [ ! -f "$MCP_RECONNECT_PATCH" ]; then
   echo "Error: MCP reconnect patch not found: $MCP_RECONNECT_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$EAGER_INPUT_STREAMING_PATCH" ]; then
-  echo "Error: Eager input streaming patch not found: $EAGER_INPUT_STREAMING_PATCH"
   exit 1
 fi
 
@@ -230,28 +232,7 @@ fi
 git apply "$MCP_RECONNECT_PATCH"
 echo "✓ MCP reconnect patch applied"
 
-# --- Patch 7: Eager input streaming workaround (local) ---
-
-echo "Applying eager-input-streaming.patch..."
-if ! git apply --check "$EAGER_INPUT_STREAMING_PATCH" 2>/dev/null; then
-  echo ""
-  echo "❌ EAGER INPUT STREAMING PATCH FAILED TO APPLY"
-  echo ""
-  echo "Attempting to apply for diagnostics..."
-  git apply "$EAGER_INPUT_STREAMING_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
-  echo "The eager input streaming patch may need updating for this upstream version."
-  echo "Refs: anomalyco/opencode#23257, #23541, #23767"
-  exit 1
-fi
-
-git apply "$EAGER_INPUT_STREAMING_PATCH"
-echo "✓ Eager input streaming patch applied"
-
-# --- Patch 8: InstanceStore partition fix (one-line server.ts memoMap + InstanceBootstrap refactor) ---
+# --- Patch 7: InstanceStore partition fix (one-line server.ts memoMap + InstanceBootstrap refactor) ---
 
 echo "Applying instance-state-partition.patch..."
 if ! git apply --check "$INSTANCE_STATE_PARTITION_PATCH" 2>/dev/null; then
@@ -273,7 +254,7 @@ fi
 git apply "$INSTANCE_STATE_PARTITION_PATCH"
 echo "✓ Instance state partition patch applied"
 
-# --- Patch 9: Cache thinking-skip (local; replaces dropped caching.patch) ---
+# --- Patch 8: Cache thinking-skip (local; replaces dropped caching.patch) ---
 # Upstream applyCaching marks msg.content[length-1] blindly, which can land a
 # cache_control breakpoint on a trailing reasoning/thinking block -> Anthropic
 # HTTP 400 (anomalyco/opencode#17883). This scans backwards to the last cacheable

@@ -1,5 +1,5 @@
 diff --git a/packages/app/vite.js b/packages/app/vite.js
-index e1f851653..42997fe89 100644
+index e1f8516..42997fe 100644
 --- a/packages/app/vite.js
 +++ b/packages/app/vite.js
 @@ -23,6 +23,7 @@ export default [
@@ -11,26 +11,32 @@ index e1f851653..42997fe89 100644
          },
          define: {
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 2fc93c482..20437081c 100644
+index a75a3c9..3393149 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -1243,12 +1243,23 @@ export const layer = Layer.effect(
+@@ -1256,14 +1256,27 @@ export const layer = Layer.effect(
          let structured: unknown
          let step = 0
          const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-+        let msgs: MessageV2.WithParts[] | undefined
++        let msgs: SessionV1.WithParts[] | undefined
 +        let needsFullReload = true
  
          while (true) {
            yield* status.set(sessionID, { type: "busy" })
            yield* slog.info("loop", { step })
  
--          let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+-          let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+-            Effect.provideService(Database.Service, database),
+-          )
 +          if (needsFullReload || !msgs) {
-+            msgs = yield* MessageV2.filterCompactedEffect(sessionID)
++            msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
++              Effect.provideService(Database.Service, database),
++            )
 +            needsFullReload = false
 +          } else {
-+            const fresh = yield* MessageV2.filterCompactedEffect(sessionID)
++            const fresh = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
++              Effect.provideService(Database.Service, database),
++            )
 +            const knownIDs = new Set(msgs.map((m) => m.info.id))
 +            for (const m of fresh) {
 +              if (!knownIDs.has(m.info.id)) msgs.push(m)
@@ -39,7 +45,7 @@ index 2fc93c482..20437081c 100644
  
            const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
  
-@@ -1288,6 +1299,7 @@ export const layer = Layer.effect(
+@@ -1314,6 +1327,7 @@ export const layer = Layer.effect(
  
            if (task?.type === "subtask") {
              yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
@@ -47,7 +53,7 @@ index 2fc93c482..20437081c 100644
              continue
            }
  
-@@ -1300,6 +1312,7 @@ export const layer = Layer.effect(
+@@ -1326,6 +1340,7 @@ export const layer = Layer.effect(
                overflow: task.overflow,
              })
              if (result === "stop") break
@@ -55,7 +61,7 @@ index 2fc93c482..20437081c 100644
              continue
            }
  
-@@ -1309,6 +1322,7 @@ export const layer = Layer.effect(
+@@ -1335,6 +1350,7 @@ export const layer = Layer.effect(
              (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
            ) {
              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
@@ -63,7 +69,7 @@ index 2fc93c482..20437081c 100644
              continue
            }
  
-@@ -1466,6 +1480,7 @@ export const layer = Layer.effect(
+@@ -1492,6 +1508,7 @@ export const layer = Layer.effect(
                  auto: true,
                  overflow: !handle.message.finish,
                })
@@ -71,6 +77,3 @@ index 2fc93c482..20437081c 100644
              }
              return "continue" as const
            }).pipe(
--- 
-2.51.2
-

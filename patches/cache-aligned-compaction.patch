@@ -1,16 +1,16 @@
 diff --git a/packages/opencode/src/session/compaction.ts b/packages/opencode/src/session/compaction.ts
-index ef007fe74..57524f716 100644
+index b165aa8..1ba97ce 100644
 --- a/packages/opencode/src/session/compaction.ts
 +++ b/packages/opencode/src/session/compaction.ts
-@@ -20,6 +20,7 @@ import { serviceUse } from "@/effect/service-use"
- import { RuntimeFlags } from "@/effect/runtime-flags"
- import { EventV2Bridge } from "@/event-v2-bridge"
- import { SessionEvent } from "@opencode-ai/core/session-event"
+@@ -24,6 +24,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
+ import { ProviderV2 } from "@opencode-ai/core/provider"
+ import { ModelV2 } from "@opencode-ai/core/model"
+ import { EventV2 } from "@opencode-ai/core/event"
 +import { type Tool as AITool } from "ai"
  
  const log = Log.create({ service: "session.compaction" })
  
-@@ -92,6 +93,13 @@ type CompletedCompaction = {
+@@ -96,6 +97,13 @@ type CompletedCompaction = {
    summary: string | undefined
  }
  
@@ -18,13 +18,13 @@ index ef007fe74..57524f716 100644
 +  agent: Agent.Info
 +  system: string[]
 +  tools: Record<string, AITool>
-+  user: MessageV2.User
++  user: SessionV1.User
 +}
 +
- function summaryText(message: MessageV2.WithParts) {
+ function summaryText(message: SessionV1.WithParts) {
    const text = message.parts
-     .filter((part): part is MessageV2.TextPart => part.type === "text")
-@@ -195,6 +203,7 @@ export interface Interface {
+     .filter((part): part is SessionV1.TextPart => part.type === "text")
+@@ -199,6 +207,7 @@ export interface Interface {
      sessionID: SessionID
      auto: boolean
      overflow?: boolean
@@ -32,7 +32,7 @@ index ef007fe74..57524f716 100644
    }) => Effect.Effect<"continue" | "stop">
    readonly create: (input: {
      sessionID: SessionID
-@@ -347,6 +356,7 @@ export const layer = Layer.effect(
+@@ -350,6 +359,7 @@ export const layer = Layer.effect(
        sessionID: SessionID
        auto: boolean
        overflow?: boolean
@@ -40,7 +40,7 @@ index ef007fe74..57524f716 100644
      }) {
        const parent = input.messages.findLast((m) => m.info.id === input.parentID)
        if (!parent || parent.info.role !== "user") {
-@@ -380,17 +390,19 @@ export const layer = Layer.effect(
+@@ -383,17 +393,19 @@ export const layer = Layer.effect(
          }
        }
  
@@ -65,7 +65,7 @@ index ef007fe74..57524f716 100644
          cfg,
          model,
        })
-@@ -403,10 +415,11 @@ export const layer = Layer.effect(
+@@ -406,10 +418,11 @@ export const layer = Layer.effect(
        const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
        const msgs = structuredClone(selected.head)
        yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
@@ -79,9 +79,9 @@ index ef007fe74..57524f716 100644
 +        resolved ? undefined : { stripMedia: true, toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS },
 +      )
        const ctx = yield* InstanceState.context
-       const msg: MessageV2.Assistant = {
+       const msg: SessionV1.Assistant = {
          id: MessageID.ascending(),
-@@ -440,21 +453,43 @@ export const layer = Layer.effect(
+@@ -443,21 +456,43 @@ export const layer = Layer.effect(
          sessionID: input.sessionID,
          model,
        })
@@ -139,12 +139,12 @@ index ef007fe74..57524f716 100644
 +      )
  
        if (result === "compact") {
-         processor.message.error = new MessageV2.ContextOverflowError({
+         processor.message.error = new SessionV1.ContextOverflowError({
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 20437081c..02385c02e 100644
+index 3393149..7aff02c 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -685,6 +685,33 @@ export const layer = Layer.effect(
+@@ -694,6 +694,33 @@ export const layer = Layer.effect(
        return yield* provider.defaultModel().pipe(Effect.orDie)
      })
  
@@ -154,7 +154,7 @@ index 20437081c..02385c02e 100644
 +      session: Session.Info
 +      processor?: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
 +      bypassAgentCheck: boolean
-+      messages: MessageV2.WithParts[]
++      messages: SessionV1.WithParts[]
 +      promptOps: TaskPromptOps
 +    }) {
 +      const [resolvedTools, [skills, env, instructions]] = yield* Effect.all([
@@ -178,7 +178,7 @@ index 20437081c..02385c02e 100644
      const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
        const agentName = input.agent
        const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
-@@ -1304,12 +1331,57 @@ export const layer = Layer.effect(
+@@ -1332,12 +1359,57 @@ export const layer = Layer.effect(
            }
  
            if (task?.type === "compaction") {
@@ -187,7 +187,7 @@ index 20437081c..02385c02e 100644
 +              ? yield* provider.getModel(compactionAgentInfo.model.providerID, compactionAgentInfo.model.modelID)
 +              : model
 +            const originalUser = msgs.findLast(
-+              (m): m is MessageV2.WithParts & { info: MessageV2.User } =>
++              (m): m is SessionV1.WithParts & { info: SessionV1.User } =>
 +                m.info.role === "user" && !m.parts.some((p) => p.type === "compaction"),
 +            )
 +            const canReusePrefix =
@@ -200,7 +200,7 @@ index 20437081c..02385c02e 100644
 +                  agent: Agent.Info
 +                  system: string[]
 +                  tools: Record<string, AITool>
-+                  user: MessageV2.User
++                  user: SessionV1.User
 +                }
 +              | undefined
 +            if (canReusePrefix) {
@@ -236,7 +236,7 @@ index 20437081c..02385c02e 100644
              })
              if (result === "stop") break
              needsFullReload = true
-@@ -1382,34 +1454,6 @@ export const layer = Layer.effect(
+@@ -1410,34 +1482,6 @@ export const layer = Layer.effect(
              const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
              const promptOps = yield* ops()
  
@@ -271,7 +271,7 @@ index 20437081c..02385c02e 100644
              if (step > 1 && lastFinished) {
                for (const m of msgs) {
                  if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
-@@ -1430,15 +1474,33 @@ export const layer = Layer.effect(
+@@ -1458,15 +1502,33 @@ export const layer = Layer.effect(
  
              yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
  
@@ -312,28 +312,28 @@ index 20437081c..02385c02e 100644
                user: lastUser,
                agent,
 diff --git a/packages/opencode/src/session/tools.ts b/packages/opencode/src/session/tools.ts
-index 89aa32d46..4ebf90e66 100644
+index 3474979..d73615d 100644
 --- a/packages/opencode/src/session/tools.ts
 +++ b/packages/opencode/src/session/tools.ts
 @@ -16,7 +16,7 @@ import { Effect } from "effect"
  import { MessageV2 } from "./message-v2"
- import * as Session from "./session"
+ import { Session } from "./session"
  import { SessionProcessor } from "./processor"
 -import { PartID } from "./schema"
 +import { PartID, MessageID } from "./schema"
- import * as Log from "@opencode-ai/core/util/log"
+ import { Log } from "@opencode-ai/core/util/log"
  import { EffectBridge } from "@/effect/bridge"
- 
-@@ -26,7 +26,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+ import { ProviderV2 } from "@opencode-ai/core/provider"
+@@ -28,7 +28,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
    agent: Agent.Info
    model: Provider.Model
    session: Session.Info
 -  processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
 +  processor?: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
    bypassAgentCheck: boolean
-   messages: MessageV2.WithParts[]
+   messages: SessionV1.WithParts[]
    promptOps: TaskPromptOps
-@@ -40,34 +40,40 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+@@ -42,34 +42,40 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
    const mcp = yield* MCP.Service
    const truncate = yield* Truncate.Service
  
@@ -390,7 +390,7 @@ index 89aa32d46..4ebf90e66 100644
            ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
          })
          .pipe(Effect.orDie),
-@@ -98,7 +104,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+@@ -100,7 +106,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                  ...attachment,
                  id: PartID.ascending(),
                  sessionID: ctx.sessionID,
@@ -399,7 +399,7 @@ index 89aa32d46..4ebf90e66 100644
                })),
              }
              yield* plugin.trigger(
-@@ -106,8 +112,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+@@ -108,8 +114,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
                output,
              )
@@ -410,7 +410,7 @@ index 89aa32d46..4ebf90e66 100644
              }
              return output
            }),
-@@ -141,7 +147,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+@@ -143,7 +149,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                  "tool.name": key,
                  "tool.call_id": opts.toolCallId,
                  "session.id": ctx.sessionID,
@@ -419,7 +419,7 @@ index 89aa32d46..4ebf90e66 100644
                },
              }),
            )
-@@ -190,12 +196,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
+@@ -192,12 +198,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                ...attachment,
                id: PartID.ascending(),
                sessionID: ctx.sessionID,
