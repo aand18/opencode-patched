@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + instance-state-partition + cache-thinking-skip
+# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + instance-state-partition + cache-thinking-skip + retry-cap
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
@@ -60,6 +60,7 @@ TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
 INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
 CACHE_THINKING_SKIP_PATCH="$SCRIPT_DIR/cache-thinking-skip.patch"
+RETRY_CAP_PATCH="$SCRIPT_DIR/retry-cap.patch"
 
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
@@ -103,6 +104,11 @@ fi
 
 if [ ! -f "$CACHE_THINKING_SKIP_PATCH" ]; then
   echo "Error: Cache thinking-skip patch not found: $CACHE_THINKING_SKIP_PATCH"
+  exit 1
+fi
+
+if [ ! -f "$RETRY_CAP_PATCH" ]; then
+  echo "Error: Retry cap patch not found: $RETRY_CAP_PATCH"
   exit 1
 fi
 
@@ -280,6 +286,35 @@ fi
 
 git apply "$CACHE_THINKING_SKIP_PATCH"
 echo "✓ Cache thinking-skip patch applied"
+
+# --- Patch 9: Per-step retry attempt cap + backoff jitter (local) ---
+# OpenCode core's per-step LLM retry policy (session/retry.ts `policy()`) had NO
+# attempt ceiling: a step hitting a persistently-retryable condition re-issued the
+# ENTIRE (billable) provider stream every <=30s forever, amplifying successful
+# gemini Vertex calls ~35x (the 2026-06 surge). This caps retries at MAX_RETRIES=8
+# (1 initial + 8 retries) and adds downward jitter to the no-header backoff so
+# concurrent stuck sessions don't synchronize their 30s re-issues (thundering herd).
+# Targets session/retry.ts + test/session/retry.test.ts. Sunset signal: upstream
+# adding an attempt ceiling to the retry schedule.
+
+echo "Applying retry-cap.patch..."
+if ! git apply --check "$RETRY_CAP_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ RETRY CAP PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$RETRY_CAP_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The retry-cap patch may need updating for this upstream version."
+  echo "It targets policy()/delay() in session/retry.ts. See docs/investigations/2026-06-05-vertex-gemini-surge."
+  exit 1
+fi
+
+git apply "$RETRY_CAP_PATCH"
+echo "✓ Retry cap patch applied"
 
 # --- Summary ---
 

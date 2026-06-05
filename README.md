@@ -1,6 +1,6 @@
 # opencode-patched
 
-**OpenCode with [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [instance state partition](patches/instance-state-partition.patch) + [cache thinking-skip](https://github.com/anomalyco/opencode/issues/17883)**
+**OpenCode with [prompt-loop byte identity](https://github.com/anomalyco/opencode/pull/25367) + [cache-aligned compaction](https://github.com/anomalyco/opencode/pull/25100) + [Gemini empty parts fix](https://github.com/anomalyco/opencode/pull/28669) + [vim keybindings](https://github.com/anomalyco/opencode/pull/12679) + [tool use/result fix](https://github.com/anomalyco/opencode/pull/16751) + [MCP auto-reconnect](https://github.com/anomalyco/opencode/issues/15247) + [instance state partition](patches/instance-state-partition.patch) + [cache thinking-skip](https://github.com/anomalyco/opencode/issues/17883) + [per-step retry cap + jitter](patches/retry-cap.patch)**
 
 This repository layers a small set of local patches onto upstream OpenCode and builds a single binary automatically for 4 platforms.
 
@@ -101,6 +101,40 @@ It's a ~15-line change to `applyCaching` in `provider/transform.ts`. Tracked ups
 as Issue [#17883](https://github.com/anomalyco/opencode/issues/17883); when upstream
 fixes it, this patch can be dropped.
 
+### 9. Per-Step Retry Cap + Backoff Jitter
+
+Stored locally as `patches/retry-cap.patch`. OpenCode core's per-step LLM retry
+policy (`packages/opencode/src/session/retry.ts` `policy()`) had **no attempt
+ceiling**: `Schedule.fromStepWithMetadata` terminated only when `retryable()`
+stopped classifying the error as retryable. A step hitting a *persistently*
+retryable condition (mid-stream `overloaded`/`exhausted` under HTTP 200,
+ECONNRESET/header-timeout, or a post-stream finish-step throw) re-issued the
+**entire model stream** — a fresh, billable provider request — every ≤30s
+**forever**. Because OpenCode records one assistant message (DB "step-start") per
+*step* but re-calls the model on every retry, one step mapped to dozens-to-thousands
+of successful Vertex calls. This was the root cause of the 2026-06 gemini-3.5-flash
+cost surge (~35× amplification of *successful* calls; ~$1.5–2.5k wasted in one
+overnight window). Full RCA: workstation
+`docs/investigations/2026-06-05-vertex-gemini-surge/lgtm-retry-rootcause.md`.
+
+The patch makes two changes to `session/retry.ts`:
+
+- **Attempt cap**: `policy()` now stops after `MAX_RETRIES = 8` retries
+  (`if (!retry || meta.attempt > MAX_RETRIES) return Cause.done(...)`), turning an
+  unbounded 30s-interval loop into a bounded burst of at most 1 initial + 8 = 9
+  stream issues before the error propagates.
+- **Backoff jitter**: `delay()` applies downward jitter (`RETRY_JITTER_RATIO = 0.2`)
+  to the no-header exponential backoff so concurrent stuck sessions don't synchronize
+  their 30s re-issues (thundering herd against one quota). Downward-only keeps the 30s
+  ceiling a true upper bound; explicit `retry-after` / `retry-after-ms` hints are
+  honored exactly and never jittered.
+
+Coverage in `test/session/retry.test.ts`: the cap is proven both by driving the
+schedule directly (`Schedule.toStepWithMetadata` halts after `MAX_RETRIES`) and via
+`Effect.retry` (a persistently-failing effect runs exactly `MAX_RETRIES + 1` times);
+the delay test asserts the jittered band instead of exact values. Sunset signal:
+upstream adding an attempt ceiling to the retry schedule.
+
 ## DROPPED patches (sunset history)
 
 - **eager-input-streaming.patch (Issue #23541)** — DROPPED on 2026-06-05 during the v1.16.2 rebase. v1.16.0+ `ProviderTransform.options()` now sets `toolStreaming = false` upstream for `@ai-sdk/google-vertex/anthropic` and non-claude `@ai-sdk/anthropic`, which covers our usage; the local patch became redundant.
@@ -157,7 +191,7 @@ Timing Chain (every 8 hours):
 (upstream anomalyco/opencode publishes a release)
 
 :01  opencode-patched/sync-upstream   -- detects new upstream release directly
-        |-> builds v{VER}-patched       -- applies prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + instance-state-partition + cache-thinking-skip patches, publishes
+        |-> builds v{VER}-patched       -- applies prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool fix + mcp reconnect + instance-state-partition + cache-thinking-skip + retry-cap patches, publishes
 :01  opencode-patched/sync-vim-pr     -- checks PR #12679 for changes
 :01  opencode-patched/sync-tool-fix-pr -- checks PR #16751 for changes
 
@@ -173,7 +207,7 @@ which watches `anomalyco/opencode` releases directly.
 ### Build Process
 
 1. Clone upstream OpenCode at the release tag
-2. Apply the local patches in order: `prompt-loop-cache.patch`, `cache-aligned-compaction.patch`, `gemini-empty-parts.patch`, `vim.patch`, `tool-fix.patch`, `mcp-reconnect.patch`, `instance-state-partition.patch`, `cache-thinking-skip.patch` (see `patches/apply.sh`)
+2. Apply the local patches in order: `prompt-loop-cache.patch`, `cache-aligned-compaction.patch`, `gemini-empty-parts.patch`, `vim.patch`, `tool-fix.patch`, `mcp-reconnect.patch`, `instance-state-partition.patch`, `cache-thinking-skip.patch`, `retry-cap.patch` (see `patches/apply.sh`)
 3. Build with Bun for 4 platforms (linux/darwin x arm64/x64)
 4. Publish release as `v{VERSION}-patched`
 
@@ -188,6 +222,7 @@ The patches modify mostly different areas of the codebase:
 - **MCP reconnect**: `mcp/index.ts`
 - **Instance state partition**: `effect/app-runtime.ts`, `project/instance-layer.ts`, `server/routes/instance/httpapi/server.ts`, `server/server.ts`, `worktree/index.ts` (and corresponding tests)
 - **Cache thinking-skip**: `provider/transform.ts` (the `applyCaching` breakpoint loop)
+- **Per-step retry cap + jitter**: `session/retry.ts`, `test/session/retry.test.ts`
 
 The file touched by more than one patch is `provider/transform.ts` (gemini-empty-parts in `normalizeMessages()`, cache-thinking-skip in `applyCaching()`) and `session/prompt.ts` (prompt-loop-cache + cache-aligned-compaction). The overlapping patches modify disjoint regions and apply cleanly in the documented order.
 
@@ -205,6 +240,7 @@ Each patch is owned by a specific repo. Do not edit a patch in the wrong repo.
 | `mcp-reconnect.patch` | **this repo** (`patches/mcp-reconnect.patch`) | Issue #15247 |
 | `instance-state-partition.patch` | **this repo** (`patches/instance-state-partition.patch`) | local (upstream PR pending burn-in) |
 | `cache-thinking-skip.patch` | **this repo** (`patches/cache-thinking-skip.patch`) | Issue #17883 |
+| `retry-cap.patch` | **this repo** (`patches/retry-cap.patch`) | local (no upstream PR yet) |
 
 When an upstream PR is merged, the corresponding patch can be dropped. (The big
 `caching.patch` formerly lived in the sibling repo `opencode-cached`; it was dropped
