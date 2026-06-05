@@ -17,13 +17,15 @@
 # which is preserved here as the small local cache-thinking-skip.patch.
 # See workstation docs/plans/2026-06-02-paring-back-opencode-cached-caching.md.
 #
-# TARGET UPSTREAM: opencode v1.16.0
-# Patches were rebased from v1.15.13 to v1.16.0 on 2026-06-05 (the v1/v2 namespace
+# TARGET UPSTREAM: opencode v1.16.2
+# Patches were rebased from v1.15.13 to v1.16.2 on 2026-06-05 (the v1/v2 namespace
+# migration landed in v1.16.0; the stack was validated against v1.16.0 then
+# retargeted to v1.16.2 — patches apply byte-identically, build + tests green).
 # migration: MessageV2 types -> SessionV1, Bus -> EventV2Bridge/events,
 # AppFileSystem -> FSUtil, ProviderID/ModelID -> ProviderV2.ID/ModelV2.ID, plus
 # prompt/index.tsx + AppLayer restructures). See
 # docs/plans/2026-06-05-refresh-patch-stack-for-v1.16.0.md.
-# eager-input-streaming.patch was DROPPED on 2026-06-05: v1.16.0's options()
+# eager-input-streaming.patch was DROPPED on 2026-06-05: v1.16.0+ options()
 # (provider/transform.ts) now sets toolStreaming=false for
 # @ai-sdk/google-vertex/anthropic and non-claude @ai-sdk/anthropic upstream, which
 # fully covers our usage; the patch is redundant.
