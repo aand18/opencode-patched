@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + instance-state-partition + cache-thinking-skip
+# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + instance-state-partition + cache-thinking-skip + retry-cap
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
 # vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch,
-# instance-state-partition.patch, and cache-thinking-skip.patch.
+# instance-state-partition.patch, cache-thinking-skip.patch, and retry-cap.patch.
 #
 # NOTE (2026-06-02): the big caching.patch (formerly fetched from opencode-cached,
 # PR #5422) was DROPPED. Upstream applyCaching already implements the moving-tail
@@ -17,7 +17,8 @@
 # which is preserved here as the small local cache-thinking-skip.patch.
 # See workstation docs/plans/2026-06-02-paring-back-opencode-cached-caching.md.
 #
-# TARGET UPSTREAM: opencode v1.15.12
+# TARGET UPSTREAM: opencode v1.15.13
+# retry-cap.patch (Patch 10) added on this release/v1.15 1.15-workstream branch: caps per-step stream retries (MAX_RETRIES=8) + adds backoff jitter.
 # Patches were rebased from v1.15.10 to v1.15.12 on 2026-05-28.
 # bus-eager-subscribe.patch (PR #27959) and bus instance context fix (PR #28051)
 # were DROPPED because they are both upstream-merged in v1.15.5+.
@@ -51,6 +52,7 @@ MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
 EAGER_INPUT_STREAMING_PATCH="$SCRIPT_DIR/eager-input-streaming.patch"
 INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
 CACHE_THINKING_SKIP_PATCH="$SCRIPT_DIR/cache-thinking-skip.patch"
+RETRY_CAP_PATCH="$SCRIPT_DIR/retry-cap.patch"
 
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
@@ -297,6 +299,17 @@ fi
 
 git apply "$CACHE_THINKING_SKIP_PATCH"
 echo "✓ Cache thinking-skip patch applied"
+
+# --- Patch 10: Per-step retry attempt cap + backoff jitter (local) ---
+
+echo "Applying retry-cap.patch..."
+if ! git apply --check "$RETRY_CAP_PATCH" 2>/dev/null; then
+  echo "❌ RETRY CAP PATCH FAILED TO APPLY (targets session/retry.ts policy()/delay())"
+  git apply "$RETRY_CAP_PATCH" 2>&1 || true
+  exit 1
+fi
+git apply "$RETRY_CAP_PATCH"
+echo "✓ Retry cap patch applied"
 
 # --- Summary ---
 
