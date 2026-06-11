@@ -10,8 +10,9 @@
 #   2. tool-fix.patch             (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   3. cache-thinking-skip.patch  (#17883)    - cache breakpoint scans past trailing thinking/reasoning blocks
 #   4. retry-cap.patch            (local)     - MAX_RETRIES=8 + backoff jitter (Vertex/Gemini runaway cure)
-#   5. vim.patch                  (PR #12679) - vim keybindings (re-ported to packages/tui/ for 1.17)
-#      [vim is added once re-derived; see PATCHES array below.]
+#   5. vim.patch                  (PR #12679) - vim keybindings, re-ported to the new
+#                                               packages/tui/ TUI package for 1.17 (TUI moved
+#                                               out of packages/opencode in 1.16/1.17).
 #
 # DROPPED on the v1.17 line (see workstation docs/plans/2026-06-11-opencode-1.17-cutover-runbook.md):
 #   - prompt-loop-cache.patch (#25367) + cache-aligned-compaction.patch (#25100):
@@ -61,6 +62,7 @@ PATCHES=(
   tool-fix
   cache-thinking-skip
   retry-cap
+  vim
 )
 
 for name in "${PATCHES[@]}"; do
