@@ -10,7 +10,17 @@
 #   2. tool-fix.patch             (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   3. cache-thinking-skip.patch  (#17883)    - cache breakpoint scans past trailing thinking/reasoning blocks
 #   4. retry-cap.patch            (local)     - MAX_RETRIES=8 + backoff jitter (Vertex/Gemini runaway cure)
-#   5. vim.patch                  (PR #12679) - vim keybindings, re-ported to the new
+#   5. instance-state-partition.patch (local) - share the process-global memoMap between the TCP
+#                                               listener (server.ts startListener) and the in-process
+#                                               webHandler/app-runtime, AND make InstanceLayer.layer a
+#                                               stable reference (= InstanceStore.layer, bootstrap
+#                                               injected externally) so the shared memoMap materializes
+#                                               ONE InstanceStore.Service per directory. Fixes the
+#                                               Question tool hang on submit (dual-instance: question
+#                                               registered on one instance, reply routed to the other).
+#                                               Re-ported to v1.17.2 2026-06-11 (re-verified the 1.17
+#                                               listener still used Layer.makeMemoMapUnsafe()).
+#   6. vim.patch                  (PR #12679) - vim keybindings, re-ported to the new
 #                                               packages/tui/ TUI package for 1.17 (TUI moved
 #                                               out of packages/opencode in 1.16/1.17).
 #
@@ -23,10 +33,11 @@
 #   - eager-input-streaming.patch: SUPERSEDED by upstream. v1.17.2 transform.ts options() sets
 #     toolStreaming=false for @ai-sdk/google-vertex/anthropic and non-claude @ai-sdk/anthropic
 #     (better scoped than our patch, which also disabled it for first-party claude).
-#   - instance-state-partition.patch: 1.17 refactored the instance/HTTP layer
-#     (HttpApiApp.webHandler() + Layer.buildWithMemoMap + makeMemoMapUnsafe). Not upstreamed;
-#     dropped because the patch's separate-memoMap premise may be moot on the new architecture.
-#     RISK: re-verify the Question tool does not hang on submit in 1.17 (cutover Phase 4 validation).
+#   (instance-state-partition.patch was provisionally dropped at the 1.17 cutover on the theory
+#    the new instance/HTTP layer made it moot — that theory was WRONG. v1.17.2 server.ts
+#    startListener still used Layer.makeMemoMapUnsafe() and instance-layer.ts was byte-identical
+#    to the buggy 1.15 pre-patch form, so the Question tool still hung on submit. Re-ported and
+#    restored as patch #5 above on 2026-06-11. See workstation bead workstation-gwd.)
 #   - mcp-reconnect.patch: 1.17 remote MCP connection is oauth-aware (McpOAuthProvider + SSE
 #     fallback + connectTransport Effect); the patch's naive inline transport reconnect bypasses
 #     oauth and can't call the Effect connect helpers from an async execute() without re-architecting
@@ -62,6 +73,7 @@ PATCHES=(
   tool-fix
   cache-thinking-skip
   retry-cap
+  instance-state-partition
   vim
 )
 
