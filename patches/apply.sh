@@ -2,7 +2,7 @@
 # Apply local patches to opencode source for the v1.17 release line.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
-# TARGET UPSTREAM: opencode v1.17.2
+# TARGET UPSTREAM: opencode v1.17.4
 #
 # PATCH SET (v1.17 line, rebased 2026-06-11 from the v1.15 line):
 #   1. gemini-empty-parts.patch   (PR #28669) - pad empty Gemini/Vertex parts arrays
@@ -23,6 +23,11 @@
 #   6. vim.patch                  (PR #12679) - vim keybindings, re-ported to the new
 #                                               packages/tui/ TUI package for 1.17 (TUI moved
 #                                               out of packages/opencode in 1.16/1.17).
+#                                               Re-ported to v1.17.4 2026-06-12 (prompt/index.tsx
+#                                               hunk #9 context drift: the send-path .catch(() => {})
+#                                               one-liner became a multi-line .catch((error) => {...});
+#                                               the vimState.clearPending() insertion point before
+#                                               history.append was otherwise intact).
 #
 # DROPPED on the v1.17 line (see workstation docs/plans/2026-06-11-opencode-1.17-cutover-runbook.md):
 #   - prompt-loop-cache.patch (#25367) + cache-aligned-compaction.patch (#25100):

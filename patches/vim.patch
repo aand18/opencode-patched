@@ -1,5 +1,5 @@
 diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
-index edf9085ae..bb12c5315 100644
+index 17a9a554c..668eebc13 100644
 --- a/packages/tui/src/app.tsx
 +++ b/packages/tui/src/app.tsx
 @@ -61,6 +61,7 @@ import * as Model from "./util/model"
@@ -10,7 +10,7 @@ index edf9085ae..bb12c5315 100644
  import { TuiConfigProvider, useTuiConfig, type TuiConfig } from "./config"
  import { createTuiApiAdapters } from "./plugin/adapters"
  import { createTuiApi } from "./plugin/api"
-@@ -356,6 +357,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
+@@ -357,6 +358,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
    const dialog = useDialog()
    const local = useLocal()
    const kv = useKV()
@@ -18,7 +18,7 @@ index edf9085ae..bb12c5315 100644
    const keymap = useOpencodeKeymap()
    const event = useEvent()
    const sdk = useSDK()
-@@ -866,6 +868,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
+@@ -867,6 +869,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
            dialog.clear()
          },
        },
@@ -35,7 +35,7 @@ index edf9085ae..bb12c5315 100644
          name: "app.toggle.animations",
          title: kv.get("animations_enabled", true) ? "Disable animations" : "Enable animations",
 diff --git a/packages/tui/src/component/prompt/index.tsx b/packages/tui/src/component/prompt/index.tsx
-index 0b8311963..2c7c1d19c 100644
+index aa002080b..66342caed 100644
 --- a/packages/tui/src/component/prompt/index.tsx
 +++ b/packages/tui/src/component/prompt/index.tsx
 @@ -54,6 +54,11 @@ import { useArgs } from "../../context/args"
@@ -180,15 +180,15 @@ index 0b8311963..2c7c1d19c 100644
      }
    })
  
-@@ -1104,6 +1183,7 @@ export function Prompt(props: PromptProps) {
-         .catch(() => {})
+@@ -1113,6 +1192,7 @@ export function Prompt(props: PromptProps) {
+         })
        if (editorParts.length > 0) editor.markSelectionSent()
      }
 +    vimState.clearPending()
      history.append({
        ...store.prompt,
        mode: currentMode,
-@@ -1270,6 +1350,18 @@ export function Prompt(props: PromptProps) {
+@@ -1279,6 +1359,18 @@ export function Prompt(props: PromptProps) {
      setStore("extmarkToPartIndex", new Map())
    }
  
@@ -207,7 +207,7 @@ index 0b8311963..2c7c1d19c 100644
    const highlight = createMemo(() => {
      if (leader()) return theme.border
      if (store.mode === "shell") return theme.primary
-@@ -1367,17 +1459,14 @@ export function Prompt(props: PromptProps) {
+@@ -1376,17 +1468,14 @@ export function Prompt(props: PromptProps) {
                  setCursorVersion((value) => value + 1)
                }}
                onCursorChange={() => setCursorVersion((value) => value + 1)}
@@ -228,7 +228,7 @@ index 0b8311963..2c7c1d19c 100644
                onPaste={async (event: PasteEvent) => {
                  if (props.disabled) {
                    event.preventDefault()
-@@ -1426,6 +1515,9 @@ export function Prompt(props: PromptProps) {
+@@ -1435,6 +1524,9 @@ export function Prompt(props: PromptProps) {
              />
              <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
                <box flexDirection="row" gap={1}>
