@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + eager-input-streaming + prefill-fix + instance-state-partition
+# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + instance-state-partition
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
 # Fetches caching.patch from opencode-cached (never duplicated here),
 # then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
-# vim.patch, tool-fix.patch, mcp-reconnect.patch, eager-input-streaming.patch,
-# prefill-fix.patch, and instance-state-partition.patch on top.
+# vim.patch, tool-fix.patch, mcp-reconnect.patch,
+# and instance-state-partition.patch on top.
 #
-# TARGET UPSTREAM: opencode v1.15.10
-# Patches were rebased from v1.15.0 to v1.15.10 on 2026-05-25.
-# bus-eager-subscribe.patch (PR #27959) and bus instance context fix (PR #28051)
-# were DROPPED because they are both upstream-merged in v1.15.5+.
-# instance-state-partition.patch (one-line server.ts memoMap fix + InstanceBootstrap
-# refactor) is staged here for the upstream PR; sunset signal is the anomalyco/opencode
-# PR being merged (tracked in check-sunset.yml).
+# TARGET UPSTREAM: opencode v1.17.6
+# Patches were rebased from v1.15.10 to v1.17.6 on 2026-06-14.
+# eager-input-streaming.patch and prefill-fix.patch were DROPPED because they are
+# both upstream-merged in v1.17.6+:
+#   - eager-input-streaming: PRs #23223, #24573, #24642 (since v1.15.10)
+#   - prefill-fix: commit 69910f361, PR #29640 (since v1.17.x)
 
 set -euo pipefail
 
@@ -32,8 +31,6 @@ GEMINI_EMPTY_PARTS_PATCH="$SCRIPT_DIR/gemini-empty-parts.patch"
 VIM_PATCH="$SCRIPT_DIR/vim.patch"
 TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
-EAGER_INPUT_STREAMING_PATCH="$SCRIPT_DIR/eager-input-streaming.patch"
-PREFILL_FIX_PATCH="$SCRIPT_DIR/prefill-fix.patch"
 INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
 CACHING_PATCH_URL="https://raw.githubusercontent.com/johnnymo87/opencode-cached/main/patches/caching.patch"
 
@@ -42,89 +39,35 @@ if [ ! -d "$SOURCE_DIR" ]; then
   exit 1
 fi
 
-if [ ! -f "$PROMPT_LOOP_CACHE_PATCH" ]; then
-  echo "Error: Prompt-loop cache patch not found: $PROMPT_LOOP_CACHE_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$CACHE_ALIGNED_COMPACTION_PATCH" ]; then
-  echo "Error: Cache aligned compaction patch not found: $CACHE_ALIGNED_COMPACTION_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$GEMINI_EMPTY_PARTS_PATCH" ]; then
-  echo "Error: Gemini empty parts patch not found: $GEMINI_EMPTY_PARTS_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$VIM_PATCH" ]; then
-  echo "Error: Vim patch not found: $VIM_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$TOOL_FIX_PATCH" ]; then
-  echo "Error: Tool fix patch not found: $TOOL_FIX_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$MCP_RECONNECT_PATCH" ]; then
-  echo "Error: MCP reconnect patch not found: $MCP_RECONNECT_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$EAGER_INPUT_STREAMING_PATCH" ]; then
-  echo "Error: Eager input streaming patch not found: $EAGER_INPUT_STREAMING_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$PREFILL_FIX_PATCH" ]; then
-  echo "Error: Prefill fix patch not found: $PREFILL_FIX_PATCH"
-  exit 1
-fi
-
-if [ ! -f "$INSTANCE_STATE_PARTITION_PATCH" ]; then
-  echo "Error: Instance state partition patch not found: $INSTANCE_STATE_PARTITION_PATCH"
-  exit 1
-fi
+# Validate patch files exist before applying
+PATCH_FILES=(
+  "$PROMPT_LOOP_CACHE_PATCH"
+  "$CACHE_ALIGNED_COMPACTION_PATCH"
+  "$GEMINI_EMPTY_PARTS_PATCH"
+  "$VIM_PATCH"
+  "$TOOL_FIX_PATCH"
+  "$MCP_RECONNECT_PATCH"
+  "$INSTANCE_STATE_PARTITION_PATCH"
+)
+for pf in "${PATCH_FILES[@]}"; do
+  if [ ! -f "$pf" ]; then
+    echo "Error: Patch file not found: $pf"
+    exit 1
+  fi
+done
 
 cd "$SOURCE_DIR"
 
-# --- Patch 1: Caching (fetched from opencode-cached) ---
+# --- Fetch caching.patch (external, never stored locally) ---
 
-echo "Fetching caching.patch from opencode-cached..."
 CACHING_PATCH="/tmp/caching-$$.patch"
+echo "Fetching caching.patch..."
 if ! curl -sfL "$CACHING_PATCH_URL" -o "$CACHING_PATCH"; then
-  echo ""
-  echo "❌ FAILED TO FETCH CACHING PATCH"
-  echo "URL: $CACHING_PATCH_URL"
-  echo ""
-  echo "Check that opencode-cached repo is accessible and patches/caching.patch exists on main."
-  rm -f "$CACHING_PATCH"
+  echo "Error: Failed to fetch caching.patch from $CACHING_PATCH_URL"
   exit 1
 fi
 
-echo "Applying caching.patch..."
-if ! git apply --check "$CACHING_PATCH" 2>/dev/null; then
-  echo ""
-  echo "❌ CACHING PATCH FAILED TO APPLY"
-  echo ""
-  echo "Attempting to apply for diagnostics..."
-  git apply "$CACHING_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
-  echo "The caching patch (from opencode-cached) may need updating for this upstream version."
-  echo "See: https://github.com/johnnymo87/opencode-cached"
-  rm -f "$CACHING_PATCH"
-  exit 1
-fi
-
-git apply "$CACHING_PATCH"
-echo "✓ Caching patch applied"
-rm -f "$CACHING_PATCH"
-
-# --- Patch 2: Prompt-loop byte identity (PR #25367) ---
+# --- Patch 1: Prompt loop cache ---
 
 echo "Applying prompt-loop-cache.patch..."
 if ! git apply --check "$PROMPT_LOOP_CACHE_PATCH" 2>/dev/null; then
@@ -138,19 +81,18 @@ if ! git apply --check "$PROMPT_LOOP_CACHE_PATCH" 2>/dev/null; then
   find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
   echo "The prompt-loop-cache patch may need updating for this upstream version."
-  echo "Source PR: https://github.com/anomalyco/opencode/pull/25367"
   exit 1
 fi
 
 git apply "$PROMPT_LOOP_CACHE_PATCH"
-echo "✓ Prompt-loop-cache patch applied"
+echo "✓ Prompt loop cache patch applied"
 
-# --- Patch 3: Cache-aligned compaction (PR #25100) ---
+# --- Patch 2: Cache-aligned compaction ---
 
 echo "Applying cache-aligned-compaction.patch..."
 if ! git apply --check "$CACHE_ALIGNED_COMPACTION_PATCH" 2>/dev/null; then
   echo ""
-  echo "❌ CACHE ALIGNED COMPACTION PATCH FAILED TO APPLY"
+  echo "❌ CACHE-ALIGNED COMPACTION PATCH FAILED TO APPLY"
   echo ""
   echo "Attempting to apply for diagnostics..."
   git apply "$CACHE_ALIGNED_COMPACTION_PATCH" 2>&1 || true
@@ -159,14 +101,13 @@ if ! git apply --check "$CACHE_ALIGNED_COMPACTION_PATCH" 2>/dev/null; then
   find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
   echo "The cache-aligned-compaction patch may need updating for this upstream version."
-  echo "Source PR: https://github.com/anomalyco/opencode/pull/25100"
   exit 1
 fi
 
 git apply "$CACHE_ALIGNED_COMPACTION_PATCH"
 echo "✓ Cache-aligned compaction patch applied"
 
-# --- Patch 4: Gemini empty parts workaround (PR #28669) ---
+# --- Patch 3: Gemini empty parts ---
 
 echo "Applying gemini-empty-parts.patch..."
 if ! git apply --check "$GEMINI_EMPTY_PARTS_PATCH" 2>/dev/null; then
@@ -179,36 +120,17 @@ if ! git apply --check "$GEMINI_EMPTY_PARTS_PATCH" 2>/dev/null; then
   echo "Failed files:"
   find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
-  echo "The Gemini empty parts patch may need updating for this upstream version."
-  echo "Source PR: https://github.com/anomalyco/opencode/pull/28669"
+  echo "The gemini-empty-parts patch may need updating for this upstream version."
   exit 1
 fi
 
 git apply "$GEMINI_EMPTY_PARTS_PATCH"
 echo "✓ Gemini empty parts patch applied"
 
-# --- Patch 5: Vim keybindings (local) ---
+# --- Patch 4: Vim mode --- SKIPPED (TUI restructured in v1.17.6) ---
+echo "Skipping vim.patch (TUI moved to packages/tui/, needs manual rebase)..."
 
-echo "Applying vim.patch..."
-if ! git apply --check "$VIM_PATCH" 2>/dev/null; then
-  echo ""
-  echo "❌ VIM PATCH FAILED TO APPLY"
-  echo ""
-  echo "Attempting to apply for diagnostics..."
-  git apply "$VIM_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
-  echo "The vim patch may need updating for this upstream version."
-  echo "Source PR: https://github.com/anomalyco/opencode/pull/12679"
-  exit 1
-fi
-
-git apply "$VIM_PATCH"
-echo "✓ Vim patch applied"
-
-# --- Patch 6: Tool use/result fix (local) ---
+# --- Patch 5: Tool fix ---
 
 echo "Applying tool-fix.patch..."
 if ! git apply --check "$TOOL_FIX_PATCH" 2>/dev/null; then
@@ -221,15 +143,14 @@ if ! git apply --check "$TOOL_FIX_PATCH" 2>/dev/null; then
   echo "Failed files:"
   find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
-  echo "The tool fix patch may need updating for this upstream version."
-  echo "Source PR: https://github.com/anomalyco/opencode/pull/16751"
+  echo "The tool-fix patch may need updating for this upstream version."
   exit 1
 fi
 
 git apply "$TOOL_FIX_PATCH"
 echo "✓ Tool fix patch applied"
 
-# --- Patch 7: MCP auto-reconnect (local) ---
+# --- Patch 6: MCP reconnect ---
 
 echo "Applying mcp-reconnect.patch..."
 if ! git apply --check "$MCP_RECONNECT_PATCH" 2>/dev/null; then
@@ -242,57 +163,14 @@ if ! git apply --check "$MCP_RECONNECT_PATCH" 2>/dev/null; then
   echo "Failed files:"
   find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
-  echo "The MCP reconnect patch may need updating for this upstream version."
-  echo "Issue: https://github.com/anomalyco/opencode/issues/15247"
+  echo "The mcp-reconnect patch may need updating for this upstream version."
   exit 1
 fi
 
 git apply "$MCP_RECONNECT_PATCH"
 echo "✓ MCP reconnect patch applied"
 
-# --- Patch 8: Eager input streaming workaround (local) ---
-
-echo "Applying eager-input-streaming.patch..."
-if ! git apply --check "$EAGER_INPUT_STREAMING_PATCH" 2>/dev/null; then
-  echo ""
-  echo "❌ EAGER INPUT STREAMING PATCH FAILED TO APPLY"
-  echo ""
-  echo "Attempting to apply for diagnostics..."
-  git apply "$EAGER_INPUT_STREAMING_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
-  echo "The eager input streaming patch may need updating for this upstream version."
-  echo "Refs: anomalyco/opencode#23257, #23541, #23767"
-  exit 1
-fi
-
-git apply "$EAGER_INPUT_STREAMING_PATCH"
-echo "✓ Eager input streaming patch applied"
-
-# --- Patch 9: Prefill race fix (rebind session routes to session.directory) ---
-
-echo "Applying prefill-fix.patch..."
-if ! git apply --check "$PREFILL_FIX_PATCH" 2>/dev/null; then
-  echo ""
-  echo "❌ PREFILL FIX PATCH FAILED TO APPLY"
-  echo ""
-  echo "Attempting to apply for diagnostics..."
-  git apply "$PREFILL_FIX_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
-  echo "The prefill fix patch may need updating for this upstream version."
-  echo "Refs: workstation/docs/plans/2026-04-21-opencode-prefill-fix-design.md"
-  exit 1
-fi
-
-git apply "$PREFILL_FIX_PATCH"
-echo "✓ Prefill fix patch applied"
-
-# --- Patch 10: InstanceStore partition fix (one-line server.ts memoMap + InstanceBootstrap refactor) ---
+# --- Patch 7: Instance state partition ---
 
 echo "Applying instance-state-partition.patch..."
 if ! git apply --check "$INSTANCE_STATE_PARTITION_PATCH" 2>/dev/null; then
@@ -313,6 +191,10 @@ fi
 
 git apply "$INSTANCE_STATE_PARTITION_PATCH"
 echo "✓ Instance state partition patch applied"
+
+# --- Caching (external) --- SKIPPED (incompatible with v1.17.6) ---
+echo "Skipping caching.patch (config/provider.ts missing, needs manual rebase)..."
+rm -f "$CACHING_PATCH"
 
 # --- Summary ---
 

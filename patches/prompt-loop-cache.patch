@@ -11,10 +11,10 @@ index e1f851653..42997fe89 100644
          },
          define: {
 diff --git a/packages/opencode/src/session/prompt.ts b/packages/opencode/src/session/prompt.ts
-index 2fc93c482..20437081c 100644
+index 631b881ee..bf04d69dd 100644
 --- a/packages/opencode/src/session/prompt.ts
 +++ b/packages/opencode/src/session/prompt.ts
-@@ -1243,12 +1243,23 @@ export const layer = Layer.effect(
+@@ -1137,14 +1137,27 @@ export const layer = Layer.effect(
          let structured: unknown
          let step = 0
          const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
@@ -23,14 +23,20 @@ index 2fc93c482..20437081c 100644
  
          while (true) {
            yield* status.set(sessionID, { type: "busy" })
-           yield* slog.info("loop", { step })
+           yield* Effect.logInfo("loop", { "session.id": sessionID, step })
  
--          let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+-          let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+-            Effect.provideService(Database.Service, database),
+-          )
 +          if (needsFullReload || !msgs) {
-+            msgs = yield* MessageV2.filterCompactedEffect(sessionID)
++            msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
++              Effect.provideService(Database.Service, database),
++            )
 +            needsFullReload = false
 +          } else {
-+            const fresh = yield* MessageV2.filterCompactedEffect(sessionID)
++            const fresh = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
++              Effect.provideService(Database.Service, database),
++            )
 +            const knownIDs = new Set(msgs.map((m) => m.info.id))
 +            for (const m of fresh) {
 +              if (!knownIDs.has(m.info.id)) msgs.push(m)
@@ -39,7 +45,7 @@ index 2fc93c482..20437081c 100644
  
            const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
  
-@@ -1288,6 +1299,7 @@ export const layer = Layer.effect(
+@@ -1196,6 +1209,7 @@ export const layer = Layer.effect(
  
            if (task?.type === "subtask") {
              yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
@@ -47,7 +53,7 @@ index 2fc93c482..20437081c 100644
              continue
            }
  
-@@ -1300,6 +1312,7 @@ export const layer = Layer.effect(
+@@ -1208,6 +1222,7 @@ export const layer = Layer.effect(
                overflow: task.overflow,
              })
              if (result === "stop") break
@@ -55,7 +61,7 @@ index 2fc93c482..20437081c 100644
              continue
            }
  
-@@ -1309,6 +1322,7 @@ export const layer = Layer.effect(
+@@ -1217,6 +1232,7 @@ export const layer = Layer.effect(
              (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
            ) {
              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
@@ -63,7 +69,7 @@ index 2fc93c482..20437081c 100644
              continue
            }
  
-@@ -1466,6 +1480,7 @@ export const layer = Layer.effect(
+@@ -1386,6 +1402,7 @@ export const layer = Layer.effect(
                  auto: true,
                  overflow: !handle.message.finish,
                })
@@ -71,6 +77,3 @@ index 2fc93c482..20437081c 100644
              }
              return "continue" as const
            }).pipe(
--- 
-2.51.2
-

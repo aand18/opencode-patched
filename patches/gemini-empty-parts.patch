@@ -1,16 +1,16 @@
 diff --git a/packages/llm/src/protocols/gemini.ts b/packages/llm/src/protocols/gemini.ts
-index 6e0b82a..6c1aa78 100644
+index c8fa34b50..2f5527c77 100644
 --- a/packages/llm/src/protocols/gemini.ts
 +++ b/packages/llm/src/protocols/gemini.ts
-@@ -196,6 +196,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
+@@ -220,6 +220,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
            return yield* ProviderShared.unsupportedContent("Gemini", "user", ["text", "media"])
-         parts.push(lowerUserPart(part))
+         parts.push(yield* lowerUserPart(part))
        }
 +      if (parts.length === 0) parts.push({ text: "" })
        contents.push({ role: "user", parts })
        continue
      }
-@@ -218,6 +219,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
+@@ -242,6 +243,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
            continue
          }
        }
@@ -18,22 +18,23 @@ index 6e0b82a..6c1aa78 100644
        contents.push({ role: "model", parts })
        continue
      }
-@@ -236,6 +238,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
-         },
-       })
+@@ -279,6 +281,7 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
+         parts.push({ inlineData: { mimeType: media.mime, data: media.base64 } })
+       }
      }
 +    if (parts.length === 0) parts.push({ text: "" })
      contents.push({ role: "user", parts })
    }
  
 diff --git a/packages/llm/test/provider/gemini.test.ts b/packages/llm/test/provider/gemini.test.ts
-index 7e6bbc8..5a5c4b3 100644
+index d30742c47..7e3cdf445 100644
 --- a/packages/llm/test/provider/gemini.test.ts
 +++ b/packages/llm/test/provider/gemini.test.ts
-@@ -110,6 +110,30 @@ describe("Gemini route", () => {
+@@ -232,6 +232,30 @@ describe("Gemini route", () => {
      }),
    )
  
++
 +  it.effect("pads completely empty messages with an empty string text part", () =>
 +    Effect.gen(function* () {
 +      const prepared = yield* LLMClient.prepare(
@@ -57,7 +58,6 @@ index 7e6bbc8..5a5c4b3 100644
 +      })
 +    }),
 +  )
-+
    it.effect("sanitizes integer enums, dangling required, untyped arrays, and scalar object keys", () =>
      Effect.gen(function* () {
        const prepared = yield* LLMClient.prepare(

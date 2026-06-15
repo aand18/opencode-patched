@@ -1,15 +1,34 @@
 diff --git a/packages/opencode/src/mcp/index.ts b/packages/opencode/src/mcp/index.ts
-index 85985876e..6982cef00 100644
+index 1de661857..a9d3ecf59 100644
 --- a/packages/opencode/src/mcp/index.ts
 +++ b/packages/opencode/src/mcp/index.ts
-@@ -1,4 +1,4 @@
--import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
-+import { dynamicTool, type Tool, jsonSchema, type JSONSchema7, type ToolExecutionOptions } from "ai"
- import { serviceUse } from "@/effect/service-use"
- import { Client } from "@modelcontextprotocol/sdk/client/index.js"
- import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-@@ -154,6 +154,24 @@ function listTools(key: string, client: MCPClient, timeout: number) {
-   )
+@@ -1,6 +1,6 @@
+ import path from "node:path"
+ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+-import { type Tool } from "ai"
++import { type Tool, type ToolExecutionOptions } from "ai"
+ import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+ import { serviceUse } from "@opencode-ai/core/effect/service-use"
+ import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js"
+@@ -11,6 +11,7 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
+ import {
+   type LoggingMessageNotification,
+   LoggingMessageNotificationSchema,
++  CallToolResultSchema,
+   type Tool as MCPToolDef,
+   ToolListChangedNotificationSchema,
+ } from "@modelcontextprotocol/sdk/types.js"
+@@ -27,7 +28,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
+ import { EventV2 } from "@opencode-ai/core/event"
+ import { TuiEvent } from "@/server/tui-event"
+ import open from "open"
+-import { Cause, Effect, Exit, Layer, Option, Context, Schema, Stream } from "effect"
++import { Cause, Effect, Exit, Layer, Option, Context, Schema, Stream } from "effect"
+ import { EffectBridge } from "@/effect/bridge"
+ import { InstanceState } from "@/effect/instance-state"
+ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+@@ -125,6 +126,24 @@ function remoteURL(value: string) {
+   if (URL.canParse(value)) return new URL(value)
  }
  
 +/**
@@ -30,83 +49,78 @@ index 85985876e..6982cef00 100644
 +  )
 +}
 +
- // Convert MCP tool definition to AI SDK Tool type
- function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
-   const inputSchema = mcpTool.inputSchema
-@@ -672,6 +690,8 @@ export const layer = Layer.effect(
-         ([clientName]) => s.status[clientName]?.status === "connected",
-       )
- 
+ interface CreateResult {
+   mcpClient?: MCPClient
+   status: Status
+@@ -620,6 +639,7 @@ export const layer = Layer.effect(
+       const cfg = yield* cfgSvc.get()
+       const config = cfg.mcp ?? {}
+       const defaultTimeout = cfg.experimental?.mcp_timeout
 +      const bridge = yield* EffectBridge.make()
-+
-       yield* Effect.forEach(
-         connectedClients,
-         ([clientName, client]) =>
-@@ -687,7 +707,63 @@ export const layer = Layer.effect(
  
-             const timeout = entry?.timeout ?? defaultTimeout
-             for (const mcpTool of listed) {
--              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
-+              const baseTool = convertMcpTool(mcpTool, client, timeout)
+       for (const [clientName, client] of Object.entries(s.clients)) {
+         if (s.status[clientName]?.status !== "connected") continue
+@@ -632,7 +652,62 @@ export const layer = Layer.effect(
+         const timeout = requestTimeout(s, clientName, mcpConfig, defaultTimeout)
+         for (const mcpTool of listed) {
+           const key = McpCatalog.sanitize(clientName) + "_" + McpCatalog.sanitize(mcpTool.name)
+-          result[key] = McpCatalog.convertTool(mcpTool, client, timeout)
++          const baseTool = McpCatalog.convertTool(mcpTool, client, timeout)
 +
-+              // Wrap remote MCP tools with auto-reconnect on stale sessions.
-+              // When the MCP server restarts, the old session ID becomes invalid
-+              // and callTool fails at the transport layer. This catches that error,
-+              // creates a fresh transport + client, and retries once.
-+              if (entry?.type === "remote" && baseTool.execute) {
-+                const origExecute = baseTool.execute
-+                const cName = clientName
-+                const mcp = entry
-+                const toolDef = mcpTool
-+                const capturedBridge = bridge
-+                baseTool.execute = async (args: unknown, options: ToolExecutionOptions) => {
++          // Wrap remote MCP tools with auto-reconnect on stale sessions.
++          // When the MCP server restarts, the old session ID becomes invalid
++          // and callTool fails at the transport layer. This catches that error,
++          // creates a fresh transport + client, and retries once.
++          if (mcpConfig && isMcpConfigured(mcpConfig) && mcpConfig.type === 'remote') {
++            const origExecute = baseTool.execute
++            if (origExecute) {
++              const cName = clientName
++              const mcp = mcpConfig
++              const toolDef = mcpTool
++              baseTool.execute = async (args, options: ToolExecutionOptions) => {
++                try {
++                  return await origExecute(args, options)
++                } catch (err) {
++                  if (!isTransportError(err)) throw err
++                  Effect.logWarning('MCP tool call failed with transport error, reconnecting', {
++                    clientName: cName,
++                    tool: toolDef.name,
++                    error: err instanceof Error ? err.message : String(err),
++                  })
 +                  try {
-+                    return await origExecute(args, options)
-+                  } catch (err) {
-+                    if (!isTransportError(err)) throw err
-+                    log.warn("MCP tool call failed with transport error, reconnecting", {
-+                      clientName: cName,
-+                      tool: toolDef.name,
-+                      error: err instanceof Error ? err.message : String(err),
-+                    })
-+                    try {
-+                      const stale = s.clients[cName]
-+                      if (stale) {
-+                        try {
-+                          await stale.close()
-+                        } catch {}
-+                      }
-+                      const transport = new StreamableHTTPClientTransport(
-+                        new URL(mcp.url),
-+                        mcp.headers ? { requestInit: { headers: mcp.headers } } : undefined,
-+                      )
-+                      const fresh = new Client({ name: "opencode", version: InstallationVersion })
-+                      await withTimeout(fresh.connect(transport), timeout ?? DEFAULT_TIMEOUT)
-+                      s.clients[cName] = fresh
-+                      s.status[cName] = { status: "connected" }
-+                      const refreshed = await withTimeout(fresh.listTools(), timeout ?? DEFAULT_TIMEOUT)
-+                      s.defs[cName] = refreshed.tools
-+                      watch(s, cName, fresh, capturedBridge, timeout)
-+                      return await fresh.callTool(
-+                        { name: toolDef.name, arguments: (args || {}) as Record<string, unknown> },
-+                        CallToolResultSchema,
-+                        { resetTimeoutOnProgress: true, timeout },
-+                      )
-+                    } catch (reconnectErr) {
-+                      log.error("MCP reconnect failed, propagating original error", {
-+                        clientName: cName,
-+                        error: reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr),
-+                      })
-+                      throw err
++                    const stale = s.clients[cName]
++                    if (stale) {
++                      try { await stale.close() } catch {}
 +                    }
++                    const transport = new StreamableHTTPClientTransport(
++                      new URL(mcp.url),
++                      mcp.headers ? { requestInit: { headers: mcp.headers } } : undefined,
++                    )
++                    const fresh = new Client({ name: 'opencode', version: InstallationVersion })
++                    await withTimeout(fresh.connect(transport), timeout ?? DEFAULT_TIMEOUT)
++                    s.clients[cName] = fresh
++                    s.status[cName] = { status: 'connected' }
++                    const refreshed = await withTimeout(fresh.listTools(), timeout ?? DEFAULT_TIMEOUT)
++                    s.defs[cName] = refreshed.tools
++                    watch(s, cName, fresh, bridge, timeout)
++                    return await fresh.callTool(
++                      { name: toolDef.name, arguments: (args || {}) as Record<string, unknown> },
++                      CallToolResultSchema,
++                      { resetTimeoutOnProgress: true, timeout },
++                    )
++                  } catch (reconnectErr) {
++                    Effect.logError('MCP reconnect failed, propagating original error', {
++                      clientName: cName,
++                      error: reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr),
++                    })
++                    throw err
 +                  }
 +                }
 +              }
++            }
++          }
 +
-+              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = baseTool
-             }
-           }),
-         { concurrency: "unbounded" },
--- 
-2.51.2
-
++          result[key] = baseTool
+         }
+       }
+       return result
