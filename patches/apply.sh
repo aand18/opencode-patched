@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply caching + prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + vim + tool-fix + mcp-reconnect + instance-state-partition
+# Apply prompt-loop-cache + cache-aligned-compaction + gemini-empty-parts + tool-fix + mcp-reconnect + instance-state-partition + cache-thinking-skip + retry-cap
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
@@ -32,7 +32,8 @@ VIM_PATCH="$SCRIPT_DIR/vim.patch"
 TOOL_FIX_PATCH="$SCRIPT_DIR/tool-fix.patch"
 MCP_RECONNECT_PATCH="$SCRIPT_DIR/mcp-reconnect.patch"
 INSTANCE_STATE_PARTITION_PATCH="$SCRIPT_DIR/instance-state-partition.patch"
-CACHING_PATCH_URL="https://raw.githubusercontent.com/johnnymo87/opencode-cached/main/patches/caching.patch"
+CACHE_THINKING_SKIP_PATCH="$SCRIPT_DIR/cache-thinking-skip.patch"
+RETRY_CAP_PATCH="$SCRIPT_DIR/retry-cap.patch"
 
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
@@ -48,6 +49,8 @@ PATCH_FILES=(
   "$TOOL_FIX_PATCH"
   "$MCP_RECONNECT_PATCH"
   "$INSTANCE_STATE_PARTITION_PATCH"
+  "$CACHE_THINKING_SKIP_PATCH"
+  "$RETRY_CAP_PATCH"
 )
 for pf in "${PATCH_FILES[@]}"; do
   if [ ! -f "$pf" ]; then
@@ -57,15 +60,6 @@ for pf in "${PATCH_FILES[@]}"; do
 done
 
 cd "$SOURCE_DIR"
-
-# --- Fetch caching.patch (external, never stored locally) ---
-
-CACHING_PATCH="/tmp/caching-$$.patch"
-echo "Fetching caching.patch..."
-if ! curl -sfL "$CACHING_PATCH_URL" -o "$CACHING_PATCH"; then
-  echo "Error: Failed to fetch caching.patch from $CACHING_PATCH_URL"
-  exit 1
-fi
 
 # --- Patch 1: Prompt loop cache ---
 
@@ -192,9 +186,45 @@ fi
 git apply "$INSTANCE_STATE_PARTITION_PATCH"
 echo "✓ Instance state partition patch applied"
 
-# --- Caching (external) --- SKIPPED (incompatible with v1.17.6) ---
-echo "Skipping caching.patch (config/provider.ts missing, needs manual rebase)..."
-rm -f "$CACHING_PATCH"
+# --- Patch 8: Cache thinking skip ---
+
+echo "Applying cache-thinking-skip.patch..."
+if ! git apply --check "$CACHE_THINKING_SKIP_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ CACHE-THINKING-SKIP PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$CACHE_THINKING_SKIP_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The cache-thinking-skip patch may need updating for this upstream version."
+  exit 1
+fi
+
+git apply "$CACHE_THINKING_SKIP_PATCH"
+echo "✓ Cache thinking skip patch applied"
+
+# --- Patch 9: Retry cap ---
+
+echo "Applying retry-cap.patch..."
+if ! git apply --check "$RETRY_CAP_PATCH" 2>/dev/null; then
+  echo ""
+  echo "❌ RETRY-CAP PATCH FAILED TO APPLY"
+  echo ""
+  echo "Attempting to apply for diagnostics..."
+  git apply "$RETRY_CAP_PATCH" 2>&1 || true
+  echo ""
+  echo "Failed files:"
+  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
+  echo ""
+  echo "The retry-cap patch may need updating for this upstream version."
+  exit 1
+fi
+
+git apply "$RETRY_CAP_PATCH"
+echo "✓ Retry cap patch applied"
 
 # --- Summary ---
 

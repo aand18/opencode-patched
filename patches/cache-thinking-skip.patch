@@ -1,0 +1,38 @@
+diff --git a/packages/opencode/src/provider/transform.ts b/packages/opencode/src/provider/transform.ts
+index ea55bb2..75f5b19 100644
+--- a/packages/opencode/src/provider/transform.ts
++++ b/packages/opencode/src/provider/transform.ts
+@@ -375,13 +375,26 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
+     const shouldUseContentOptions = !useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0
+ 
+     if (shouldUseContentOptions) {
+-      const lastContent = msg.content[msg.content.length - 1]
+-      if (
+-        lastContent &&
+-        typeof lastContent === "object" &&
+-        lastContent.type !== "tool-approval-request" &&
+-        lastContent.type !== "tool-approval-response"
+-      ) {
++      // Mark the last CACHEABLE block: scan backwards and skip trailing
++      // reasoning/redacted-reasoning (Anthropic rejects cache_control on thinking
++      // blocks -> HTTP 400, cf anomalyco/opencode#17883) and tool-approval
++      // pseudo-blocks. Upstream marked content[length-1] blindly.
++      let lastContent: any = undefined
++      for (let i = msg.content.length - 1; i >= 0; i--) {
++        const c = msg.content[i]
++        if (
++          c &&
++          typeof c === "object" &&
++          c.type !== "reasoning" &&
++          c.type !== "redacted-reasoning" &&
++          c.type !== "tool-approval-request" &&
++          c.type !== "tool-approval-response"
++        ) {
++          lastContent = c
++          break
++        }
++      }
++      if (lastContent) {
+         lastContent.providerOptions = mergeDeep(lastContent.providerOptions ?? {}, providerOptions)
+         continue
+       }
