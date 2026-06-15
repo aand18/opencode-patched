@@ -3,10 +3,10 @@
 # patches to opencode source.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
-# Fetches caching.patch from opencode-cached (never duplicated here),
-# then applies local prompt-loop-cache.patch, cache-aligned-compaction.patch, gemini-empty-parts.patch,
-# vim.patch, tool-fix.patch, mcp-reconnect.patch,
-# and instance-state-partition.patch on top.
+# Applies local prompt-loop-cache.patch, cache-aligned-compaction.patch,
+# gemini-empty-parts.patch, tool-fix.patch, mcp-reconnect.patch,
+# instance-state-partition.patch, cache-thinking-skip.patch, and retry-cap.patch.
+# vim.patch and caching.patch are SKIPPED (see inline comments).
 #
 # TARGET UPSTREAM: opencode v1.17.6
 # Patches were rebased from v1.15.10 to v1.17.6 on 2026-06-14.
@@ -71,9 +71,6 @@ if ! git apply --check "$PROMPT_LOOP_CACHE_PATCH" 2>/dev/null; then
   echo "Attempting to apply for diagnostics..."
   git apply "$PROMPT_LOOP_CACHE_PATCH" 2>&1 || true
   echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
   echo "The prompt-loop-cache patch may need updating for this upstream version."
   exit 1
 fi
@@ -91,9 +88,6 @@ if ! git apply --check "$CACHE_ALIGNED_COMPACTION_PATCH" 2>/dev/null; then
   echo "Attempting to apply for diagnostics..."
   git apply "$CACHE_ALIGNED_COMPACTION_PATCH" 2>&1 || true
   echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
   echo "The cache-aligned-compaction patch may need updating for this upstream version."
   exit 1
 fi
@@ -110,9 +104,6 @@ if ! git apply --check "$GEMINI_EMPTY_PARTS_PATCH" 2>/dev/null; then
   echo ""
   echo "Attempting to apply for diagnostics..."
   git apply "$GEMINI_EMPTY_PARTS_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
   echo "The gemini-empty-parts patch may need updating for this upstream version."
   exit 1
@@ -134,9 +125,6 @@ if ! git apply --check "$TOOL_FIX_PATCH" 2>/dev/null; then
   echo "Attempting to apply for diagnostics..."
   git apply "$TOOL_FIX_PATCH" 2>&1 || true
   echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
   echo "The tool-fix patch may need updating for this upstream version."
   exit 1
 fi
@@ -154,9 +142,6 @@ if ! git apply --check "$MCP_RECONNECT_PATCH" 2>/dev/null; then
   echo "Attempting to apply for diagnostics..."
   git apply "$MCP_RECONNECT_PATCH" 2>&1 || true
   echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
   echo "The mcp-reconnect patch may need updating for this upstream version."
   exit 1
 fi
@@ -173,9 +158,6 @@ if ! git apply --check "$INSTANCE_STATE_PARTITION_PATCH" 2>/dev/null; then
   echo ""
   echo "Attempting to apply for diagnostics..."
   git apply "$INSTANCE_STATE_PARTITION_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
   echo "The instance-state-partition patch may need updating for this upstream version."
   echo "Refs: pigeon/docs/plans/2026-05-26-instancestate-partition-fix-design.md"
@@ -196,9 +178,6 @@ if ! git apply --check "$CACHE_THINKING_SKIP_PATCH" 2>/dev/null; then
   echo "Attempting to apply for diagnostics..."
   git apply "$CACHE_THINKING_SKIP_PATCH" 2>&1 || true
   echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
-  echo ""
   echo "The cache-thinking-skip patch may need updating for this upstream version."
   exit 1
 fi
@@ -215,9 +194,6 @@ if ! git apply --check "$RETRY_CAP_PATCH" 2>/dev/null; then
   echo ""
   echo "Attempting to apply for diagnostics..."
   git apply "$RETRY_CAP_PATCH" 2>&1 || true
-  echo ""
-  echo "Failed files:"
-  find . -name "*.rej" -type f 2>/dev/null || echo "  None found"
   echo ""
   echo "The retry-cap patch may need updating for this upstream version."
   exit 1
