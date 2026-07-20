@@ -1,0 +1,146 @@
+diff --git a/packages/tui/src/context/sync.tsx b/packages/tui/src/context/sync.tsx
+index d0511c5..8a96ff6 100644
+--- a/packages/tui/src/context/sync.tsx
++++ b/packages/tui/src/context/sync.tsx
+@@ -28,7 +28,7 @@ import { useTuiStartup } from "./runtime"
+ import { createSimpleContext } from "./helper"
+ import { useExit } from "./exit"
+ import { useArgs } from "./args"
+-import { batch, onMount } from "solid-js"
++import { batch, onMount, onCleanup } from "solid-js"
+ import path from "path"
+ import { useKV } from "./kv"
+ import { usePermission } from "./permission"
+@@ -141,6 +141,13 @@ export const {
+     const project = useProject()
+     const sdk = useSDK()
+ 
++    let disposedTimeout: ReturnType<typeof setTimeout> | undefined
++    onCleanup(() => {
++      if (disposedTimeout) {
++        clearTimeout(disposedTimeout)
++      }
++    })
++
+     const fullSyncedSessions = new Set<string>()
+     const syncingSessions = new Map<string, Promise<void>>()
+     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+@@ -169,9 +176,20 @@ export const {
+ 
+     event.subscribe((event, { directory, workspace }) => {
+       switch (event.type) {
+-        case "server.instance.disposed":
+-          void bootstrap()
++        case "server.instance.disposed": {
++          const targetDir = event.properties?.directory
++          const currentDir = project.instance.directory()
++          const currentWorkspace = project.workspace.current()
++          if ((!targetDir || targetDir === currentDir) && (!workspace || workspace === currentWorkspace)) {
++            if (disposedTimeout) {
++              clearTimeout(disposedTimeout)
++            }
++            disposedTimeout = setTimeout(() => {
++              void bootstrap()
++            }, 250)
++          }
+           break
++        }
+         case "permission.replied": {
+           const requests = store.permission[event.properties.sessionID]
+           if (!requests) break
+diff --git a/packages/tui/test/cli/cmd/tui/disposed.test.tsx b/packages/tui/test/cli/cmd/tui/disposed.test.tsx
+new file mode 100644
+index 0000000..857118e
+--- /dev/null
++++ b/packages/tui/test/cli/cmd/tui/disposed.test.tsx
+@@ -0,0 +1,90 @@
++/** @jsxImportSource @opentui/solid */
++import { describe, expect, test } from "bun:test"
++import { tmpdir } from "../../../fixture/fixture"
++import { mount, wait } from "./sync-fixture"
++import type { GlobalEvent } from "@opencode-ai/sdk/v2"
++
++describe("tui sync disposed filter and debounce", () => {
++  test("server.instance.disposed events are filtered and debounced", async () => {
++    await using tmp = await tmpdir()
++    await Bun.write(`${tmp.path}/kv.json`, "{}")
++    const { app, emit, project, sync, session } = await mount(undefined, tmp.path)
++
++    try {
++      const currentDir = project.instance.directory()
++      const currentWorkspace = project.workspace.current()
++      const baseline = session.length
++
++      // (a) a disposed event for a DIFFERENT directory does NOT trigger bootstrap
++      emit({
++        directory: "/tmp/different-dir",
++        project: "proj_test",
++        workspace: currentWorkspace,
++        payload: {
++          id: "evt_disposed_different",
++          type: "server.instance.disposed",
++          properties: { directory: "/tmp/different-dir" },
++        },
++      })
++
++      // Wait to verify no bootstrap is triggered
++      await Bun.sleep(400)
++      expect(session.length).toBe(baseline)
++
++      // (b) a disposed event for THIS directory DOES (after debounce)
++      emit({
++        directory: currentDir,
++        project: "proj_test",
++        workspace: currentWorkspace,
++        payload: {
++          id: "evt_disposed_this",
++          type: "server.instance.disposed",
++          properties: { directory: currentDir },
++        },
++      })
++
++      // Wait for the debounced bootstrap to run
++      await wait(() => session.length === baseline + 1)
++
++      // (c) a rapid burst coalesces into ONE bootstrap
++      const beforeBurst = session.length
++      emit({
++        directory: currentDir,
++        project: "proj_test",
++        workspace: currentWorkspace,
++        payload: {
++          id: "evt_disposed_burst1",
++          type: "server.instance.disposed",
++          properties: { directory: currentDir },
++        },
++      })
++      emit({
++        directory: currentDir,
++        project: "proj_test",
++        workspace: currentWorkspace,
++        payload: {
++          id: "evt_disposed_burst2",
++          type: "server.instance.disposed",
++          properties: { directory: currentDir },
++        },
++      })
++      emit({
++        directory: currentDir,
++        project: "proj_test",
++        workspace: currentWorkspace,
++        payload: {
++          id: "evt_disposed_burst3",
++          type: "server.instance.disposed",
++          properties: { directory: currentDir },
++        },
++      })
++
++      // Wait and verify only 1 additional bootstrap ran
++      await Bun.sleep(400)
++      expect(session.length).toBe(beforeBurst + 1)
++
++    } finally {
++      app.renderer.destroy()
++    }
++  })
++})
