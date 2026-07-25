@@ -11,6 +11,10 @@
 - Binary output: `packages/opencode/dist/opencode-linux-x64/bin/opencode`
 - Binaries stored at: `~/.opencode/bin/`
 
+**After build:**
+1. Copy binary to `~/.opencode/bin/` with versioned name: `cp opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode ~/.opencode/bin/opencode-v{VERSION}-patched-{CHANNEL}-{TIMESTAMP}` (e.g., `opencode-v1.18.3-patched-prod-202607251625`). `{CHANNEL}` matches `OPENCODE_CHANNEL` env var (e.g., `prod`). Get timestamp from `--version` output.
+2. Backup database: `cp ~/.local/share/opencode/opencode.db ~/.local/share/opencode/opencode.db.bak.{TIMESTAMP}`
+
 **UI toggle:** New layout is controlled by `newLayoutDesigns` in browser localStorage key `settings.v3` under `general`. Toggle in Settings → General → "New layout". Sunset date: Sept 14, 2026 (old UI forced off after).
 
 **Patches:** See `patches/apply.sh` header for current patch set and dropped patches.

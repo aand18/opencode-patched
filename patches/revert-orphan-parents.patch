@@ -1,8 +1,8 @@
 diff --git a/packages/opencode/src/session/revert.ts b/packages/opencode/src/session/revert.ts
-index 950d533a3..510dd3aec 100644
+index 4139665..303ab72 100644
 --- a/packages/opencode/src/session/revert.ts
 +++ b/packages/opencode/src/session/revert.ts
-@@ -119,6 +119,18 @@ export const layer = Layer.effect(
+@@ -116,6 +116,18 @@ export const layer = Layer.effect(
          }
          remove.push(msg)
        }
@@ -19,5 +19,5 @@ index 950d533a3..510dd3aec 100644
 +        })
 +      }
        for (const msg of remove) {
-         yield* sync.run(MessageV2.Event.Removed, {
-           sessionID,
+         yield* sessions.removeMessage({ sessionID, messageID: msg.info.id })
+       }
