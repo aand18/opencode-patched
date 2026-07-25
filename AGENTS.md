@@ -15,6 +15,8 @@
 
 **Patches:** See `patches/apply.sh` header for current patch set and dropped patches.
 
+**VCS large repo fix (v1.18.3+):** `vcs-untracked-normal.patch` switches `git status --untracked-files=all` to `--untracked-files=normal` and filters directory entries. Prevents CPU saturation and VCS crash on repos with many untracked files (upstream #33928, #21699, #3176).
+
 **UI toggle bug (v1.18.x):** The "New layout" toggle in Settings → General is hidden by default because `layoutTransitionEligible` defaults to `false` and nothing ever sets it to `true`. To show the toggle and switch to old layout, run in browser console:
 ```javascript
 const s = JSON.parse(localStorage.getItem("settings.v3") || "{}");
