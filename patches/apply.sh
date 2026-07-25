@@ -13,6 +13,7 @@
 #   6. available-cache.patch    (local)     - herd-collapse cache for CatalogV2 provider/model availability
 #   7. compaction-bounded-load.patch (local) - bound prompt loop message load to compaction window
 #   8. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
+#   9. vcs-untracked-normal.patch    (local) - respect .gitignore for untracked files, prevent VCS crash on large repos
 #
 # DROPPED patches:
 #   - prompt-loop-cache.patch (#25367) + cache-aligned-compaction.patch (#25100):
@@ -46,6 +47,7 @@ PATCH_NAMES=(
   available-cache
   compaction-bounded-load
   sqlite-foreign-key-wrap
+  vcs-untracked-normal
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then
