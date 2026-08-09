@@ -1,8 +1,8 @@
 diff --git a/packages/opencode/src/session/retry.ts b/packages/opencode/src/session/retry.ts
-index 4139665..303ab72 100644
+index cab48dd..cf58c9f 100644
 --- a/packages/opencode/src/session/retry.ts
 +++ b/packages/opencode/src/session/retry.ts
-@@ -28,10 +28,29 @@ export const RETRY_BACKOFF_FACTOR = 2
+@@ -28,6 +28,16 @@ export const RETRY_BACKOFF_FACTOR = 2
  export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
  export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
  
@@ -16,7 +16,10 @@ index 4139665..303ab72 100644
 +// Fraction by which the no-header backoff is randomly reduced (see `jitter`).
 +export const RETRY_JITTER_RATIO = 0.2
 +
- function cap(ms: number) {
+ const RETRYABLE_MESSAGE_PATTERNS = [
+   /429|500|502|503|504|524/i,
+   /rate increased too quickly|rate limit|rate-limit|rate_limit|too many requests/i,
+@@ -41,6 +51,15 @@ function cap(ms: number) {
    return Math.min(ms, RETRY_MAX_DELAY)
  }
  
@@ -32,7 +35,7 @@ index 4139665..303ab72 100644
  export function delay(attempt: number, error?: SessionV1.APIError) {
    if (error) {
      const headers = error.data.responseHeaders
-@@ -62,7 +81,7 @@ export function delay(attempt: number, error?: SessionV1.APIError) {
+@@ -71,7 +90,7 @@ export function delay(attempt: number, error?: SessionV1.APIError) {
      }
    }
  
@@ -41,7 +44,7 @@ index 4139665..303ab72 100644
  }
  
  export function retryable(error: Err, provider: string) {
-@@ -182,7 +201,11 @@ export function policy(opts: {
+@@ -181,7 +200,11 @@ export function policy(opts: {
      Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
        const error = opts.parse(meta.input)
        const retry = retryable(error, opts.provider)
@@ -55,7 +58,7 @@ index 4139665..303ab72 100644
          const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
          const now = yield* Clock.currentTimeMillis
 diff --git a/packages/opencode/test/session/retry.test.ts b/packages/opencode/test/session/retry.test.ts
-index 30ac879..fa525aa 100644
+index 018f76f..5997ece 100644
 --- a/packages/opencode/test/session/retry.test.ts
 +++ b/packages/opencode/test/session/retry.test.ts
 @@ -4,7 +4,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -135,5 +138,5 @@ index 30ac879..fa525aa 100644
 +})
 +
  describe("session.retry.retryable", () => {
-   test("maps too_many_requests json messages", () => {
+   test("retries serialized too_many_requests messages", () => {
      const error = wrap(JSON.stringify({ type: "error", error: { type: "too_many_requests" } }))

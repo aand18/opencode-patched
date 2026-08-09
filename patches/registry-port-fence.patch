@@ -1,0 +1,1396 @@
+diff --git a/packages/core/src/flag/flag.ts b/packages/core/src/flag/flag.ts
+index 5be4e46..1d85ed5 100644
+--- a/packages/core/src/flag/flag.ts
++++ b/packages/core/src/flag/flag.ts
+@@ -47,6 +47,23 @@ export const Flag = {
+   OPENCODE_DB: process.env["OPENCODE_DB"],
+   OPENCODE_ROUTING_DB: process.env["OPENCODE_ROUTING_DB"],
+   OPENCODE_SERVE_ID: process.env["OPENCODE_SERVE_ID"],
++  // Registry port fence (bead pigeon-13p): the TCP port the serve unit expects
++  // THIS slot to bind. Set by the serve unit from the same Nix port list that
++  // derives OPENCODE_SERVE_ID, so it cannot drift. A process that inherits
++  // OPENCODE_SERVE_ID from a parent opencode session inherits this too but binds
++  // a different port, which is how the hijack is caught. Read at access time so
++  // tests can set it per-spawn. Unset = fence unarmed (today's behaviour) so the
++  // binary release and the unit rebuild can land in either order.
++  get OPENCODE_SERVE_EXPECTED_PORT() {
++    return process.env["OPENCODE_SERVE_EXPECTED_PORT"]
++  },
++  // Registry PID fence (bead workstation-4b1q): the PID of the legitimate serve
++  // process. Set by the wrapper as OPENCODE_SERVE_EXPECTED_PID=$$ before exec, so
++  // $$ == process.pid for the legitimate serve. Inherited by child processes but
++  // unforgeable by a child, closing port/host/socket hijack variants.
++  get OPENCODE_SERVE_EXPECTED_PID() {
++    return process.env["OPENCODE_SERVE_EXPECTED_PID"]
++  },
+   // Serve self-heartbeat interval (ms). Default 5000. Lowered in tests for a
+   // tighter RED/GREEN signal; also a legitimate production tunable.
+   get OPENCODE_HEARTBEAT_INTERVAL_MS() {
+diff --git a/packages/core/src/serve/routing-lease.ts b/packages/core/src/serve/routing-lease.ts
+index 92a91af..da8843c 100644
+--- a/packages/core/src/serve/routing-lease.ts
++++ b/packages/core/src/serve/routing-lease.ts
+@@ -46,6 +46,16 @@ export interface RoutingLeaseDbAdapter {
+ 
+   readValid(sessionId: string, token: LeaseToken): Promise<boolean>;
+ 
++  /**
++   * Repair THIS serve's own registry row if another process overwrote it.
++   * Returns the damaged values it replaced, or null when the row already agreed.
++   */
++  selfHeal(options: {
++    serveId: string;
++    instanceUuid: string;
++    endpoint: string;
++  }): Promise<{ instanceUuid: string; endpoint: string; draining: boolean } | null>;
++
+   registerSelf(options: {
+     serveId: string;
+     instanceUuid: string;
+@@ -151,7 +161,18 @@ async function loadUnifiedDb(dbPath: string) {
+       }
+     };
+   } else {
+-    const { DatabaseSync } = await import("node:sqlite");
++    // Computed specifier on purpose. With a literal "node:sqlite", Bun's
++    // transpiler resolves this dynamic import STATICALLY at import-analysis time
++    // and hard-errors ("Could not resolve: node:sqlite") on any Bun build without
++    // the node:sqlite shim -- e.g. Bun 1.3.3 on linux-arm64, i.e. cloudbox. That
++    // made packages/opencode/test/cli/serve/serve-process.test.ts unrunnable in its
++    // entirety even though this branch is dead under Bun (the isBun check above
++    // takes the bun:sqlite path). Building the specifier at runtime defeats the
++    // static resolution while keeping the node fallback working under plain Node.
++    const nodeSqlite = "node:" + "sqlite";
++    const { DatabaseSync } = (await import(/* @vite-ignore */ nodeSqlite)) as {
++      DatabaseSync: new (path: string) => any;
++    };
+     const nativeDb = new DatabaseSync(dbPath);
+ 
+     return {
+@@ -237,8 +258,40 @@ export async function openRoutingLeaseDb(): Promise<RoutingLeaseDbAdapter> {
+       "UPDATE serve_instance SET heartbeat_at = @now, health_state = 'healthy' WHERE serve_id = @serveId"
+     );
+ 
++    // SELF-HEAL (bead pigeon-13p). Repairs ONLY the three columns this process
++    // owns as the slot's true occupant, and only when they actually disagree.
++    //
++    // Deliberately NOT `registerSelf`: that statement also rewrites binary_epoch
++    // from routing_meta, so a periodic re-register would let a stale binary adopt
++    // a bumped epoch and re-enter the healthy pool it was meant to be fenced out
++    // of. This owns instance_uuid / endpoint / draining and nothing else.
++    //
++    // The WHERE clause makes the normal case a no-op write, so this costs one
++    // indexed PK probe per tick on a healthy serve.
++    const selfHealStmt = db.prepare(
++      `UPDATE serve_instance
++          SET instance_uuid = @instanceUuid,
++              endpoint = @endpoint,
++              draining = 0,
++              health_state = 'healthy',
++              heartbeat_at = @heartbeatAt
++        WHERE serve_id = @serveId
++          AND (instance_uuid != @instanceUuid OR endpoint != @endpoint OR draining != 0)`
++    );
++
++    const selectSelfStmt = db.prepare(
++      `SELECT instance_uuid, endpoint, draining FROM serve_instance WHERE serve_id = @serveId`
++    );
++
+     const markDeadStmt = db.prepare(
+-      "UPDATE serve_instance SET draining = 1 WHERE serve_id = @serveId"
++      // IDENTITY-FENCED. Only the process whose instance_uuid is currently in the
++      // row may drain it. Keyed on serve_id alone, a departing ROGUE evicts a live
++      // serve: the rogue claims the slot, the real serve's selfHeal restores the
++      // uuid, then the rogue's SIGTERM finalizer sets draining=1 on a row it no
++      // longer owns. `isServeHealthy` requires !draining and nothing clears it, so
++      // the live serve is out of the pool until someone restarts it. That is the
++      // third damage mode of the 2026-07-25 incident, and this closes it at source.
++      "UPDATE serve_instance SET draining = 1 WHERE serve_id = @serveId AND instance_uuid = @instanceUuid"
+     );
+ 
+     const acquireCASStmt = db.prepare(
+@@ -400,6 +453,59 @@ export async function openRoutingLeaseDb(): Promise<RoutingLeaseDbAdapter> {
+         });
+       },
+ 
++      async selfHeal(options) {
++        return withRetry(() => {
++          const row: any = selectSelfStmt.get({ serveId: options.serveId, "@serveId": options.serveId });
++          if (!row) {
++            // The row is gone entirely (reaped or deleted). A full register is the
++            // only way back, and it is safe here because there is nothing to clobber.
++            // Recreate at the epoch WE registered with, never at whatever
++            // routing_meta says now. Using the current epoch here would be exactly
++            // the hole this module avoids by not healing via registerSelf: a stale
++            // binary would re-enter the pool it was fenced out of. Deleting a
++            // poisoned row is the natural incident-response move, so this branch is
++            // reachable at precisely the wrong moment (mid-cutover).
++            if (selfBootEpoch === null) return null;
++            registerSelfStmt.run({
++              serveId: options.serveId,
++              instanceUuid: options.instanceUuid,
++              endpoint: options.endpoint,
++              binaryEpoch: selfBootEpoch,
++              heartbeatAt: Date.now(),
++            });
++            return { instanceUuid: "<row absent>", endpoint: "<row absent>", draining: false };
++          }
++
++          const previous = {
++            instanceUuid: String(row.instance_uuid),
++            endpoint: String(row.endpoint),
++            draining: Number(row.draining) === 1,
++          };
++          // A foreign writer ALWAYS leaves a foreign instance_uuid, because only
++          // registerSelf writes that column. So uuid+endpoint agreeing means nobody
++          // else touched this row, and a draining=1 we find in that state came from
++          // a human -- the operator's last sticky lever for evicting a live-but-sick
++          // serve (health_state is overwritten by our own heartbeat within 5s, and
++          // endpoint by pigeon's reconciler within 5s). Un-draining it would mean
++          // the serve fights the operator taking it out of rotation. Respect it.
++          const identityIntact =
++            previous.instanceUuid === options.instanceUuid &&
++            previous.endpoint === options.endpoint;
++          if (identityIntact) {
++            return null;
++          }
++
++          const params = {
++            serveId: options.serveId,
++            instanceUuid: options.instanceUuid,
++            endpoint: options.endpoint,
++            heartbeatAt: Date.now(),
++          };
++          const res = selfHealStmt.run(params);
++          return res.changes > 0 ? previous : null;
++        });
++      },
++
+       async registerSelf(options) {
+         return withRetry(() => {
+           const now = Date.now();
+@@ -419,6 +525,7 @@ export async function openRoutingLeaseDb(): Promise<RoutingLeaseDbAdapter> {
+ 
+           registerSelfStmt.run(params);
+           setSelfIdentity({ serveId: options.serveId, instanceUuid: options.instanceUuid });
++          selfBootEpoch = binaryEpoch;
+         });
+       },
+ 
+@@ -434,10 +541,12 @@ export async function openRoutingLeaseDb(): Promise<RoutingLeaseDbAdapter> {
+       },
+ 
+       async markDead(serveId) {
++        // No identity == we never registered (or the fence refused us), so we have
++        // no standing to drain anyone's slot.
++        const identity = getSelfIdentity();
++        if (!identity || identity.serveId !== serveId) return false;
+         return withRetry(() => {
+-          const res = markDeadStmt.run({
+-            serveId,
+-          });
++          const res = markDeadStmt.run({ serveId, instanceUuid: identity.instanceUuid });
+           return res.changes > 0;
+         });
+       },
+@@ -456,6 +565,9 @@ export async function openRoutingLeaseDb(): Promise<RoutingLeaseDbAdapter> {
+ 
+ let sharedLeasePromise: Promise<RoutingLeaseDbAdapter> | null = null;
+ let selfIdentity: { serveId: string; instanceUuid: string } | null = null;
++/** The binary_epoch this process registered with. selfHeal must recreate a deleted
++ *  row at THIS epoch, never at whatever routing_meta currently says. */
++let selfBootEpoch: number | null = null;
+ 
+ export function getSelfIdentity(): { serveId: string; instanceUuid: string } | null {
+   return selfIdentity;
+@@ -463,6 +575,11 @@ export function getSelfIdentity(): { serveId: string; instanceUuid: string } | n
+ 
+ export function setSelfIdentity(id: { serveId: string; instanceUuid: string } | null): void {
+   selfIdentity = id;
++  if (id === null) selfBootEpoch = null;
++}
++
++export function __setSelfBootEpoch(epoch: number | null): void {
++  selfBootEpoch = epoch;
+ }
+ 
+ export async function getSharedRoutingLease(): Promise<RoutingLeaseDbAdapter> {
+@@ -475,4 +592,128 @@ export async function getSharedRoutingLease(): Promise<RoutingLeaseDbAdapter> {
+ export function __resetSharedRoutingLease(): void {
+   sharedLeasePromise = null;
+   selfIdentity = null;
++  selfBootEpoch = null;
++}
++
++// ---------------------------------------------------------------------------
++// Registry port fence (bead pigeon-13p)
++// ---------------------------------------------------------------------------
++
++/**
++ * The result of checking that this process actually owns the pool slot it is
++ * about to claim.
++ *
++ * WHY THIS EXISTS. `registerSelf` upserts with `ON CONFLICT(serve_id) DO UPDATE
++ * SET instance_uuid = excluded.instance_uuid, endpoint = excluded.endpoint`, so
++ * ANY process that inherits OPENCODE_SERVE_ID + OPENCODE_ROUTING_DB from its
++ * parent environment silently takes over that slot. On 2026-07-25 a throwaway
++ * `opencode serve` spawned from inside an opencode session did exactly that,
++ * twice, and pointed pigeon's serve-1 slot at the random high port it had bound.
++ * 76 sessions were routed to a closed port for hours; nothing in the system could
++ * detect or repair it (the real serve keeps heartbeating the same row healthy).
++ *
++ * WHY A PORT. Exactly one process can hold a given TCP port, so possession of the
++ * slot's port is an unforgeable fencing token and the KERNEL is the arbiter. No
++ * heartbeat inference, no takeover-delay tuning, no clock assumptions.
++ *
++ * WHY AN ENV VAR AND NOT `--port`. Comparing the bound port against this process's
++ * own `--port` would be vacuous — the throwaway was invoked with its own random
++ * `--port` and bound it successfully. The discriminating power comes from the
++ * expectation being INHERITED: the child carries the parent slot's declared port
++ * while binding somewhere else. That mismatch is the incident's signature.
++ */
++export type PortFenceVerdict =
++  | { armed: false }
++  | { armed: true; ok: true; expectedPort: number }
++  | { armed: true; ok: false; reason: "mismatch"; expectedPort: number; boundPort: number }
++  | { armed: true; ok: false; reason: "malformed"; expectedRaw: string; boundPort: number };
++
++/**
++ * Decide whether this process may claim its OPENCODE_SERVE_ID slot.
++ *
++ * ARMED ONLY WHEN THE EXPECTATION IS PRESENT. The var is set by the serve unit,
++ * which lives in a different repository from this binary, so treating "absent" as
++ * "refuse" would crash-loop the whole pool if the binary release landed before the
++ * unit rebuild. Absent therefore means today's behaviour, and the caller MUST log
++ * that the fence is off so a silently-disarmed fence is visible.
++ *
++ * A MALFORMED value is NOT treated as absent: that would let a typo silently
++ * disable the fence forever. It fails closed, which surfaces as a visible
++ * crash-loop rather than an invisibly unfenced serve.
++ */
++export function checkServePortFence(
++  expectedRaw: string | undefined,
++  boundPort: number,
++): PortFenceVerdict {
++  if (expectedRaw === undefined || expectedRaw.trim() === "") {
++    return { armed: false };
++  }
++
++  const trimmed = expectedRaw.trim();
++  // Deliberately strict: only bare decimal digits. parseInt/Number would accept
++  // "4097x", "0x1001" or "40.97" and quietly compare something else.
++  const expectedPort = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
++  if (!Number.isInteger(expectedPort) || expectedPort < 1 || expectedPort > 65535) {
++    return { armed: true, ok: false, reason: "malformed", expectedRaw: trimmed, boundPort };
++  }
++
++  if (expectedPort !== boundPort) {
++    return { armed: true, ok: false, reason: "mismatch", expectedPort, boundPort };
++  }
++
++  return { armed: true, ok: true, expectedPort };
++}
++
++// ---------------------------------------------------------------------------
++// Registry PID fence (bead workstation-4b1q)
++// ---------------------------------------------------------------------------
++
++/**
++ * The result of checking that this process's PID matches the expected PID for its pool slot.
++ *
++ * WHY THIS EXISTS. The port fence compares OPENCODE_SERVE_EXPECTED_PORT against
++ * the bound port with no interface check. A nested `opencode serve --hostname ::1 --port 4098`
++ * binds alongside the real serve on 127.0.0.1:4098, passes the port fence, and reaches
++ * registerSelf — repointing slot instance_uuid and invalidating real serve session leases.
++ *
++ * WHY A PID. The wrapper exports OPENCODE_SERVE_EXPECTED_PID=$$ and execs the serve,
++ * so $$ == process.pid for the legitimate serve. A child process inherits the environment
++ * variable but can never inherit the PID, so PID discriminates exactly the hijack signature
++ * regardless of port, host, or socket variants.
++ */
++export type PidFenceVerdict =
++  | { armed: false }
++  | { armed: true; ok: true; expectedPid: number }
++  | { armed: true; ok: false; reason: "mismatch"; expectedPid: number; actualPid: number }
++  | { armed: true; ok: false; reason: "malformed"; expectedRaw: string; actualPid: number };
++
++/**
++ * Decide whether this process's PID matches the OPENCODE_SERVE_EXPECTED_PID expectation.
++ *
++ * ARMED ONLY WHEN THE EXPECTATION IS PRESENT. Unset or empty string means fence unarmed
++ * (fall back to existing behavior). This is MANDATORY so binary release and wrapper
++ * export can land in either order without crash-looping the pool.
++ *
++ * A MALFORMED value is NOT treated as absent: fails closed so typos cannot silently disarm.
++ */
++export function checkServePidFence(
++  expectedRaw: string | undefined,
++  actualPid: number,
++): PidFenceVerdict {
++  if (expectedRaw === undefined || expectedRaw.trim() === "") {
++    return { armed: false };
++  }
++
++  const trimmed = expectedRaw.trim();
++  // Strict bare decimal digits check: reject "123x", "0x1001", "1.5", etc.
++  const expectedPid = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
++  if (!Number.isInteger(expectedPid) || expectedPid < 1 || expectedPid > 4194304) {
++    return { armed: true, ok: false, reason: "malformed", expectedRaw: trimmed, actualPid };
++  }
++
++  if (expectedPid !== actualPid) {
++    return { armed: true, ok: false, reason: "mismatch", expectedPid, actualPid };
++  }
++
++  return { armed: true, ok: true, expectedPid };
+ }
+diff --git a/packages/core/test/serve/routing-lease.test.ts b/packages/core/test/serve/routing-lease.test.ts
+index 0820da0..56546b3 100644
+--- a/packages/core/test/serve/routing-lease.test.ts
++++ b/packages/core/test/serve/routing-lease.test.ts
+@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
+ import path from "node:path";
+ import { createHash } from "node:crypto";
+ import { tmpdir } from "../fixture/tmpdir";
+-import { openRoutingLeaseDb, SchemaMismatchError, getRoutingDbPath, EXPECTED_DDL_CHECKSUM, getSharedRoutingLease, __resetSharedRoutingLease, getSelfIdentity, setSelfIdentity } from "../../src/serve/routing-lease";
++import { openRoutingLeaseDb, SchemaMismatchError, getRoutingDbPath, EXPECTED_DDL_CHECKSUM, getSharedRoutingLease, __resetSharedRoutingLease, getSelfIdentity, setSelfIdentity, checkServePortFence, checkServePidFence } from "../../src/serve/routing-lease";
+ import { Flag } from "../../src/flag/flag";
+ 
+ const ROUTING_DDL = `
+@@ -634,3 +634,419 @@ describe("Routing Lease Adapter", () => {
+     }
+   });
+ });
++
++/**
++ * Registry port fence (bead pigeon-13p).
++ *
++ * On 2026-07-25 a throwaway `opencode serve` inherited OPENCODE_SERVE_ID +
++ * OPENCODE_ROUTING_DB from the opencode session that spawned it, bound a random
++ * high port, and its registerSelf rewrote pool slot serve-1's endpoint (and
++ * instance_uuid) in pigeon's registry. 76 sessions were routed at a closed port.
++ *
++ * Only ONE process can hold a given TCP port, so possession of the expected port
++ * is an unforgeable fencing token with the kernel as arbiter — no heartbeat
++ * inference and no takeover-delay tuning required. The throwaway inherits the
++ * slot's port EXPECTATION but binds somewhere else, which is the signature.
++ */
++/**
++ * SELF-HEAL (bead pigeon-13p, second damage class).
++ *
++ * On 2026-07-25 a harness-spawned throwaway serve claimed live slot serve-2,
++ * repointed it at :44407, clobbered its instance_uuid, and on SIGTERM its
++ * markDead finalizer set draining=1 -- while the REAL serve-2 was alive and
++ * still heartbeating that very row. `isServeHealthy` requires !draining and the
++ * heartbeat path never clears it, so the live serve stayed evicted from the pool
++ * indefinitely. Pigeon cannot fix this from its side: reasserting the endpoint
++ * leaves the rogue uuid in place, and clearing draining with a rogue uuid present
++ * is WORSE than the outage -- pigeon stamps leases from that uuid, the serve's own
++ * CAS then matches zero rows and fails closed, and every prompt 500s.
++ *
++ * The serve is the only party that knows its own true identity, so the owner
++ * heals its own row.
++ */
++describe("selfHeal", () => {
++  const withDb = async (fn: (adapter: any, dbFile: string, raw: any) => Promise<void>) => {
++    await using tmp = await tmpdir();
++    const dbFile = path.join(tmp.path, "routing.db");
++    const { Database } = await import("bun:sqlite");
++    const seed = new Database(dbFile);
++    seed.exec("PRAGMA journal_mode=WAL;");
++    seed.run(ROUTING_DDL);
++    seed.run(
++      "INSERT OR IGNORE INTO routing_meta (id, schema_version, ddl_checksum, binary_epoch, updated_at) VALUES (1, 1, ?, 7, ?)",
++      [EXPECTED_DDL_CHECKSUM, Date.now()]
++    );
++    seed.close();
++
++    const original = process.env.OPENCODE_ROUTING_DB;
++    process.env.OPENCODE_ROUTING_DB = dbFile;
++    (Flag as any).OPENCODE_ROUTING_DB = dbFile;
++    try {
++      const adapter = await openRoutingLeaseDb();
++      const raw = new Database(dbFile);
++      await fn(adapter, dbFile, raw);
++      raw.close();
++      await adapter.close();
++    } finally {
++      process.env.OPENCODE_ROUTING_DB = original;
++      (Flag as any).OPENCODE_ROUTING_DB = original;
++      __resetSharedRoutingLease();
++    }
++  };
++
++  const read = (raw: any, serveId: string) =>
++    raw.prepare("SELECT * FROM serve_instance WHERE serve_id = ?").get(serveId) as any;
++
++  test("no-ops (returns null) when the row already matches this process", async () => {
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      const before = read(raw, "serve-2");
++
++      const healed = await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      expect(healed).toBeNull();
++      // A no-op must not even bump heartbeat_at -- the worker heartbeat owns that.
++      expect(read(raw, "serve-2")).toEqual(before);
++    });
++  });
++
++  test("repairs the EXACT 2026-07-25 damage: rogue endpoint + rogue uuid + draining=1", async () => {
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      // The throwaway claims the slot, then its SIGTERM finalizer drains it.
++      raw.run(
++        "UPDATE serve_instance SET endpoint=?, instance_uuid=?, draining=1 WHERE serve_id=?",
++        ["http://127.0.0.1:44407", "50d599de-rogue", "serve-2"]
++      );
++
++      const healed = await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      expect(healed).toEqual({
++        instanceUuid: "50d599de-rogue",
++        endpoint: "http://127.0.0.1:44407",
++        draining: true,
++      });
++      const row = read(raw, "serve-2");
++      expect(row.endpoint).toBe("http://127.0.0.1:4098");
++      expect(row.instance_uuid).toBe("real-uuid");
++      expect(row.draining).toBe(0);
++      expect(row.health_state).toBe("healthy");
++    });
++  });
++
++  test("RESPECTS a lone draining=1 marker — that is the operator's eviction lever", async () => {
++    // draining=1 with our OWN uuid and endpoint intact cannot have come from a
++    // rogue: registerSelf always rewrites instance_uuid, so any foreign writer
++    // leaves a foreign uuid. It therefore came from a human (or a future drain
++    // implementation). It is the only sticky lever left for evicting a live-but-sick
++    // serve -- health_state is overwritten by our own heartbeat within 5s, and
++    // endpoint is overwritten by pigeon's reconciler within 5s. Un-draining here
++    // would mean a serve fights the operator trying to take it out of rotation.
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      raw.run("UPDATE serve_instance SET draining=1 WHERE serve_id=?", ["serve-2"]);
++
++      const healed = await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      expect(healed).toBeNull();
++      expect(read(raw, "serve-2").draining).toBe(1);
++    });
++  });
++
++  test("clears draining when identity ALSO disagrees — proof a foreign process wrote the row", async () => {
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      // Endpoint intact, but a foreign uuid: only registerSelf writes uuid, so this
++      // row was claimed by another process and its markDead set the drain.
++      raw.run("UPDATE serve_instance SET instance_uuid=?, draining=1 WHERE serve_id=?", ["rogue", "serve-2"]);
++
++      const healed = await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      expect(healed).not.toBeNull();
++      const row = read(raw, "serve-2");
++      expect(row.draining).toBe(0);
++      expect(row.instance_uuid).toBe("real-uuid");
++    });
++  });
++
++  test("row-absent recreate uses OUR boot epoch, not the current one", async () => {
++    // The patch's whole reason for not healing via registerSelf is that registerSelf
++    // re-reads binary_epoch from routing_meta, letting a stale binary re-enter the
++    // pool it was fenced out of. The row-absent branch used registerSelf and so
++    // reintroduced exactly that. Deleting a poisoned row is the natural
++    // incident-response move, which makes this reachable in the worst moment.
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      expect(read(raw, "serve-2").binary_epoch).toBe(7);
++
++      raw.run("UPDATE routing_meta SET binary_epoch=8 WHERE id=1");   // new binary deployed
++      raw.run("DELETE FROM serve_instance WHERE serve_id=?", ["serve-2"]);  // operator clears a poisoned row
++
++      await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      const row = read(raw, "serve-2");
++      expect(row).toBeDefined();
++      expect(row.endpoint).toBe("http://127.0.0.1:4098");
++      // Recreated, but still fenced OUT of the current epoch.
++      expect(row.binary_epoch).toBe(7);
++    });
++  });
++
++  test("NEVER adopts a bumped binary_epoch — a stale binary must stay fenced out", async () => {
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      expect(read(raw, "serve-2").binary_epoch).toBe(7);
++
++      // Pigeon rolls the epoch (new binary deployed). This serve is the OLD binary.
++      raw.run("UPDATE routing_meta SET binary_epoch=8 WHERE id=1");
++      raw.run("UPDATE serve_instance SET draining=1 WHERE serve_id=?", ["serve-2"]);
++
++      await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      // Healing must not smuggle this process back into the current epoch. Using
++      // registerSelf for the repair WOULD have (it re-reads binary_epoch from meta).
++      expect(read(raw, "serve-2").binary_epoch).toBe(7);
++    });
++  });
++
++  test("leaves OTHER serves' rows completely alone", async () => {
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      raw.run(
++        "INSERT INTO serve_instance (serve_id, instance_uuid, endpoint, binary_epoch, health_state, heartbeat_at, draining) VALUES (?,?,?,?,?,?,?)",
++        ["serve-3", "other-uuid", "http://127.0.0.1:4099", 7, "healthy", 123, 1]
++      );
++      raw.run("UPDATE serve_instance SET draining=1 WHERE serve_id=?", ["serve-2"]);
++
++      await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      const other = read(raw, "serve-3");
++      expect(other.draining).toBe(1);
++      expect(other.instance_uuid).toBe("other-uuid");
++      expect(other.endpoint).toBe("http://127.0.0.1:4099");
++    });
++  });
++
++  test("recreates the row if it has been deleted entirely", async () => {
++    await withDb(async (adapter, _f, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "real-uuid", endpoint: "http://127.0.0.1:4098" });
++      raw.run("DELETE FROM serve_instance WHERE serve_id=?", ["serve-2"]);
++
++      const healed = await adapter.selfHeal({
++        serveId: "serve-2",
++        instanceUuid: "real-uuid",
++        endpoint: "http://127.0.0.1:4098",
++      });
++
++      expect(healed).not.toBeNull();
++      const row = read(raw, "serve-2");
++      expect(row.endpoint).toBe("http://127.0.0.1:4098");
++      expect(row.instance_uuid).toBe("real-uuid");
++      expect(row.draining).toBe(0);
++    });
++  });
++});
++
++describe("markDead identity fence", () => {
++  const withDb = async (fn: (adapter: any, raw: any) => Promise<void>) => {
++    await using tmp = await tmpdir();
++    const dbFile = path.join(tmp.path, "routing.db");
++    const { Database } = await import("bun:sqlite");
++    const seed = new Database(dbFile);
++    seed.exec("PRAGMA journal_mode=WAL;");
++    seed.run(ROUTING_DDL);
++    seed.run(
++      "INSERT OR IGNORE INTO routing_meta (id, schema_version, ddl_checksum, binary_epoch, updated_at) VALUES (1, 1, ?, 7, ?)",
++      [EXPECTED_DDL_CHECKSUM, Date.now()]
++    );
++    seed.close();
++    const original = process.env.OPENCODE_ROUTING_DB;
++    process.env.OPENCODE_ROUTING_DB = dbFile;
++    (Flag as any).OPENCODE_ROUTING_DB = dbFile;
++    try {
++      const adapter = await openRoutingLeaseDb();
++      const raw = new Database(dbFile);
++      await fn(adapter, raw);
++      raw.close();
++      await adapter.close();
++    } finally {
++      process.env.OPENCODE_ROUTING_DB = original;
++      (Flag as any).OPENCODE_ROUTING_DB = original;
++      __resetSharedRoutingLease();
++    }
++  };
++  const read = (raw: any, id: string) =>
++    raw.prepare("SELECT * FROM serve_instance WHERE serve_id = ?").get(id) as any;
++
++  test("the registered owner CAN drain its own slot (clean shutdown still works)", async () => {
++    await withDb(async (adapter, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "mine", endpoint: "http://127.0.0.1:4098" });
++      expect(await adapter.markDead("serve-2")).toBe(true);
++      expect(read(raw, "serve-2").draining).toBe(1);
++    });
++  });
++
++  test("a process whose uuid is no longer in the row CANNOT drain it", async () => {
++    // The 2026-07-25 third damage mode: a rogue claims the slot, the real serve's
++    // selfHeal restores the uuid, and THEN the rogue's SIGTERM finalizer fires. With
++    // markDead keyed on serve_id alone, that departing rogue evicts a live serve.
++    await withDb(async (adapter, raw) => {
++      await adapter.registerSelf({ serveId: "serve-2", instanceUuid: "rogue", endpoint: "http://127.0.0.1:44407" });
++      raw.run("UPDATE serve_instance SET instance_uuid=?, endpoint=? WHERE serve_id=?",
++        ["real", "http://127.0.0.1:4098", "serve-2"]);
++
++      expect(await adapter.markDead("serve-2")).toBe(false);
++      expect(read(raw, "serve-2").draining).toBe(0);
++    });
++  });
++
++  test("a process that never registered CANNOT drain anything", async () => {
++    await withDb(async (adapter, raw) => {
++      raw.run(
++        "INSERT INTO serve_instance (serve_id, instance_uuid, endpoint, binary_epoch, health_state, heartbeat_at, draining) VALUES (?,?,?,?,?,?,0)",
++        ["serve-2", "someone-else", "http://127.0.0.1:4098", 7, "healthy", Date.now()]
++      );
++      setSelfIdentity(null);
++
++      expect(await adapter.markDead("serve-2")).toBe(false);
++      expect(read(raw, "serve-2").draining).toBe(0);
++    });
++  });
++});
++
++describe("checkServePortFence", () => {
++  test("UNARMED when the expectation is absent — the two deploys must be order-independent", () => {
++    // OPENCODE_SERVE_EXPECTED_PORT is set by the serve unit, which lives in a
++    // different repo from this binary. If absent meant "refuse", shipping the
++    // binary before the unit rebuild would crash-loop every serve in the pool at
++    // once. Unarmed is today's behaviour, and the caller logs that it is off.
++    expect(checkServePortFence(undefined, 4097)).toEqual({ armed: false });
++    expect(checkServePortFence("", 4097)).toEqual({ armed: false });
++    expect(checkServePortFence("   ", 4097)).toEqual({ armed: false });
++  });
++
++  test("PASSES when the bound port is the expected port", () => {
++    expect(checkServePortFence("4097", 4097)).toEqual({ armed: true, ok: true, expectedPort: 4097 });
++    // Whitespace from a shell export must not be treated as a mismatch.
++    expect(checkServePortFence(" 4097 ", 4097)).toEqual({ armed: true, ok: true, expectedPort: 4097 });
++  });
++
++  test("FAILS on the incident signature: inherited expectation, random bound port", () => {
++    // The two real strays from 2026-07-25.
++    expect(checkServePortFence("4097", 47037)).toEqual({
++      armed: true,
++      ok: false,
++      reason: "mismatch",
++      expectedPort: 4097,
++      boundPort: 47037,
++    });
++    expect(checkServePortFence("4097", 47611)).toEqual({
++      armed: true,
++      ok: false,
++      reason: "mismatch",
++      expectedPort: 4097,
++      boundPort: 47611,
++    });
++  });
++
++  test("FAILS when a serve binds ANOTHER pool slot's port", () => {
++    // `opencode serve` with no --port resolves port 0, and startWithPortFallback
++    // prefers 4096 before any free port. So a throwaway can land on serve-0's
++    // port while carrying serve-1's identity. That must not register.
++    expect(checkServePortFence("4097", 4096)).toMatchObject({ armed: true, ok: false, reason: "mismatch" });
++  });
++
++  test("FAILS CLOSED on a malformed expectation rather than silently disarming", () => {
++    // A malformed value means someone configured the fence and got it wrong.
++    // Treating it as "unarmed" would be a silent disarm, which is the failure
++    // mode this whole bead is about. A crash-looping unit gets noticed.
++    for (const bad of ["banana", "4097x", "-1", "0", "65536", "40.97", "NaN", "0x1001"]) {
++      expect(checkServePortFence(bad, 4097)).toMatchObject({
++        armed: true,
++        ok: false,
++        reason: "malformed",
++      });
++    }
++  });
++
++  test("carries the raw expectation through on malformed input so the log can name it", () => {
++    expect(checkServePortFence("banana", 4097)).toEqual({
++      armed: true,
++      ok: false,
++      reason: "malformed",
++      expectedRaw: "banana",
++      boundPort: 4097,
++    });
++  });
++});
++
++describe("checkServePidFence", () => {
++  test("UNARMED when expectation is absent, empty, or whitespace-only", () => {
++    expect(checkServePidFence(undefined, 1234)).toEqual({ armed: false });
++    expect(checkServePidFence("", 1234)).toEqual({ armed: false });
++    expect(checkServePidFence("   ", 1234)).toEqual({ armed: false });
++  });
++
++  test("PASSES when actual PID matches expected PID", () => {
++    expect(checkServePidFence("1234", 1234)).toEqual({ armed: true, ok: true, expectedPid: 1234 });
++    expect(checkServePidFence(" 1234 ", 1234)).toEqual({ armed: true, ok: true, expectedPid: 1234 });
++  });
++
++  test("FAILS on mismatch: expected PID != actual PID", () => {
++    expect(checkServePidFence("1234", 5678)).toEqual({
++      armed: true,
++      ok: false,
++      reason: "mismatch",
++      expectedPid: 1234,
++      actualPid: 5678,
++    });
++  });
++
++  test("FAILS CLOSED on malformed expectation", () => {
++    for (const bad of ["banana", "123x", "-1", "0", "1.5", "NaN", "0x1001", "4194305"]) {
++      expect(checkServePidFence(bad, 1234)).toMatchObject({
++        armed: true,
++        ok: false,
++        reason: "malformed",
++      });
++    }
++  });
++
++  test("carries raw expectation through on malformed input", () => {
++    expect(checkServePidFence("banana", 1234)).toEqual({
++      armed: true,
++      ok: false,
++      reason: "malformed",
++      expectedRaw: "banana",
++      actualPid: 1234,
++    });
++  });
++});
+diff --git a/packages/opencode/src/cli/cmd/serve.ts b/packages/opencode/src/cli/cmd/serve.ts
+index 1c5d191..358a207 100644
+--- a/packages/opencode/src/cli/cmd/serve.ts
++++ b/packages/opencode/src/cli/cmd/serve.ts
+@@ -1,6 +1,6 @@
+ import { Effect, Deferred } from "effect"
+ import { randomUUID } from "node:crypto"
+-import { getSharedRoutingLease, getRoutingDbPath } from "@opencode-ai/core/serve/routing-lease"
++import { getSharedRoutingLease, getRoutingDbPath, checkServePortFence, checkServePidFence } from "@opencode-ai/core/serve/routing-lease"
+ import { startServeHeartbeat } from "../../serve/heartbeat"
+ import { effectCmd } from "../effect-cmd"
+ import { withNetworkOptions, resolveNetworkOptions } from "../network"
+@@ -26,6 +26,98 @@ export const ServeCommand = effectCmd({
+       const serveId = Flag.OPENCODE_SERVE_ID
+       const instanceUuid = randomUUID()
+       const endpoint = `http://127.0.0.1:${server.port}`
++
++      // REGISTRY PORT FENCE (bead pigeon-13p). Claiming a pool slot rewrites that
++      // slot's endpoint AND instance_uuid for every other participant, so we must
++      // prove we are the process that owns the slot before writing. Only one
++      // process can hold the slot's TCP port, so the port is an unforgeable
++      // fencing token with the kernel as arbiter.
++      //
++      // HARD EXIT, NOT LOG-AND-SKIP. Skipping registration would leave this
++      // process running with a NULL self-identity, and withSessionLease fails OPEN
++      // on a null identity (see session/prompt.ts) — so "skip" would silently turn
++      // the session lease OFF for every session on this serve. That is the exact
++      // hazard that got the "refuse takeover while the slot looks live" design
++      // rejected, arriving through the back door. A fence whose failure mode is
++      // disabling the fence is not a fence. Exiting non-zero lets systemd restart
++      // us, so a genuinely misconfigured unit crash-loops VISIBLY (a crash-looping
++      // unit gets noticed; a silently-unfenced serve does not — the 2026-07-25
++      // incident ran for hours precisely because nothing was loud), and the pool
++      // degrades from K to K-1, which is what a pool is for.
++      // TIGHTENED RESIDUAL (bead workstation-4b1q): When OPENCODE_SERVE_EXPECTED_PID
++      // is ARMED, a process with a complete inherited identity that manages to BIND the
++      // expected port (e.g. via IPv6/IPv4 binding on ::1 alongside 127.0.0.1) fails the
++      // PID fence below and exits (exit code 21). This does NOT reintroduce the
++      // rejected "refuse takeover while the slot looks live" design, because this fence
++      // EXITS (exit 21) rather than continuing to run with a null identity (since
++      // withSessionLease fails OPEN on a null identity — that was the hazard).
++      //
++      // When OPENCODE_SERVE_EXPECTED_PID is UNSET (fence unarmed), the pre-PID-fence
++      // residual applies unchanged: binding the expected port is only possible when the
++      // real pool member is not holding it, and at that moment possession of the port is
++      // treated as "being the pool member" with the kernel as arbiter.
++      const fence = checkServePortFence(Flag.OPENCODE_SERVE_EXPECTED_PORT, server.port)
++      if (fence.armed && !fence.ok) {
++        const detail =
++          fence.reason === "mismatch"
++            ? `bound port ${fence.boundPort} != expected port ${fence.expectedPort}`
++            : `OPENCODE_SERVE_EXPECTED_PORT="${fence.expectedRaw}" is not a valid TCP port (bound ${fence.boundPort})`
++        console.error(
++          `FATAL: refusing to claim routing slot ${serveId}: ${detail}. ` +
++            `This process is not the pool member for that slot — most likely it inherited ` +
++            `OPENCODE_SERVE_ID and OPENCODE_ROUTING_DB from a parent opencode session. ` +
++            `Registering would repoint ${serveId} at ${endpoint} for every client and ` +
++            `invalidate the real serve's session leases. Scrub OPENCODE_SERVE_ID and ` +
++            `OPENCODE_ROUTING_DB before spawning a throwaway serve. Exiting.`,
++        )
++        // Exit before registerSelf, so no endpoint/instance_uuid write happens, and
++        // before setSelfIdentity, so no lease can be written either.
++        yield* Effect.sync(() => process.exit(20))
++      }
++      if (!fence.armed) {
++        // Visible-once notice rather than an invisible silent-off: dropping the var
++        // from a unit must not quietly disarm the fence. Pigeon's endpoint
++        // reconciler is the backstop that still detects (and repairs) drift here.
++        console.warn(
++          `WARNING: routing slot ${serveId} port fence NOT ARMED ` +
++            `(OPENCODE_SERVE_EXPECTED_PORT unset). Any process inheriting ` +
++            `OPENCODE_SERVE_ID + OPENCODE_ROUTING_DB can hijack this slot. ` +
++            `Set OPENCODE_SERVE_EXPECTED_PORT=<this slot's port> in the serve unit.`,
++        )
++      }
++
++      // REGISTRY PID FENCE (bead workstation-4b1q). The port fence checks TCP port
++      // possession but has no interface check, so a nested serve on ::1:4098 can
++      // bind alongside 127.0.0.1:4098 and pass the port fence. The PID fence verifies
++      // process.pid against OPENCODE_SERVE_EXPECTED_PID (exported by the wrapper as $$).
++      // A child process inherits the expectation variable but can never inherit the PID.
++      const pidFence = checkServePidFence(Flag.OPENCODE_SERVE_EXPECTED_PID, process.pid)
++      if (pidFence.armed && !pidFence.ok) {
++        const detail =
++          pidFence.reason === "mismatch"
++            ? `process PID ${pidFence.actualPid} != expected PID ${pidFence.expectedPid}`
++            : `OPENCODE_SERVE_EXPECTED_PID="${pidFence.expectedRaw}" is not a valid PID (actual PID ${pidFence.actualPid})`
++        console.error(
++          `FATAL: refusing to claim routing slot ${serveId}: ${detail}. ` +
++            `This process is not the pool member for that slot — most likely it inherited ` +
++            `OPENCODE_SERVE_ID and OPENCODE_ROUTING_DB from a parent opencode session. ` +
++            `Registering would repoint ${serveId} at ${endpoint} for every client and ` +
++            `invalidate the real serve's session leases. Scrub OPENCODE_SERVE_ID and ` +
++            `OPENCODE_ROUTING_DB before spawning a throwaway serve, or relaunch a legitimate pool member via bash -c 'export OPENCODE_SERVE_EXPECTED_PID=$$; exec opencode serve --port <port> --hostname 127.0.0.1'. Exiting.`,
++        )
++        // Exit before registerSelf, so no endpoint/instance_uuid write happens, and
++        // before setSelfIdentity, so no lease can be written either.
++        yield* Effect.sync(() => process.exit(21))
++      }
++      if (!pidFence.armed) {
++        console.warn(
++          `WARNING: routing slot ${serveId} PID fence NOT ARMED ` +
++            `(OPENCODE_SERVE_EXPECTED_PID unset). Any child process inheriting ` +
++            `OPENCODE_SERVE_ID + OPENCODE_ROUTING_DB can hijack this slot if port binding succeeds. ` +
++            `Set OPENCODE_SERVE_EXPECTED_PID=$$ in the wrapper before exec.`,
++        )
++      }
++
+       const lease = yield* Effect.promise(() => getSharedRoutingLease())
+       yield* Effect.promise(() => lease.registerSelf({ serveId, instanceUuid, endpoint }))
+       
+@@ -45,6 +137,47 @@ export const ServeCommand = effectCmd({
+           )
+           console.log(`serve heartbeat started (mode=${heartbeat.mode}, interval=${intervalMs}ms)`)
+ 
++          // SELF-HEAL (bead pigeon-13p). The heartbeat writes heartbeat_at and
++          // health_state only, so if another process overwrote this slot's
++          // endpoint / instance_uuid, or set draining=1 on its way out, NOTHING
++          // ever repairs it: the row keeps getting a fresh heartbeat from us while
++          // pointing somewhere else, and `draining` is only ever cleared by a
++          // registerSelf. That is unhealable without a restart, and it happened —
++          // on 2026-07-25 slot serve-2 sat at :44407 with draining=1 while the real
++          // serve-2 was alive and beating into that very row.
++          //
++          // Pigeon cannot fix it from its side. It can reassert the endpoint, but
++          // clearing `draining` while the rogue instance_uuid is still in the row
++          // would be WORSE than the outage: pigeon stamps leases from that uuid, our
++          // own lease CAS then matches zero rows and fails closed, and every prompt
++          // 500s. We are the only party that knows our true identity, so we own the
++          // repair. Costs one indexed PK probe per tick on a healthy serve.
++          //
++          // Caveat: if two live processes ever share a serve_id they will flap this
++          // row at tick cadence. The port fence above removes that case, and the
++          // status quo there is "rogue wins forever, silently" — bounded visible
++          // flapping is strictly better than that.
++          const selfHealMs = Math.max(intervalMs * 6, 30_000)
++          const selfHealTimer = setInterval(() => {
++            void lease
++              .selfHeal({ serveId, instanceUuid, endpoint })
++              .then((repaired) => {
++                if (repaired) {
++                  console.warn(
++                    `WARNING: routing slot ${serveId} had been overwritten by another process ` +
++                      `(endpoint=${repaired.endpoint}, instance_uuid=${repaired.instanceUuid}, ` +
++                      `draining=${repaired.draining}); restored to endpoint=${endpoint}, ` +
++                      `instance_uuid=${instanceUuid}, draining=0.`,
++                  )
++                }
++              })
++              // Never let a transient SQLITE_BUSY become an unhandled rejection:
++              // this runs inside the long-lived serve process.
++              .catch((err) => console.warn(`serve self-heal failed: ${String(err)}`))
++          }, selfHealMs)
++          selfHealTimer.unref?.()
++          yield* Effect.addFinalizer(() => Effect.sync(() => clearInterval(selfHealTimer)))
++
+           // Finalizers run LIFO: register markDead FIRST so it runs LAST, after
+           // the heartbeat has stopped — otherwise a trailing beat could resurrect
+           // health_state='healthy' over the draining marker.
+diff --git a/packages/opencode/test/cli/serve/serve-process.test.ts b/packages/opencode/test/cli/serve/serve-process.test.ts
+index 20e2783..1a08de3 100644
+--- a/packages/opencode/test/cli/serve/serve-process.test.ts
++++ b/packages/opencode/test/cli/serve/serve-process.test.ts
+@@ -319,4 +319,242 @@ describe("opencode serve (subprocess)", () => {
+       }),
+     60_000,
+   )
++
++  // ---------------------------------------------------------------------------
++  // Registry port fence (bead pigeon-13p)
++  //
++  // On 2026-07-25 a throwaway `opencode serve`, spawned from inside an opencode
++  // session, inherited OPENCODE_SERVE_ID + OPENCODE_ROUTING_DB, bound a random
++  // high port, and its registerSelf repointed pigeon's serve-1 slot at that port.
++  // 76 sessions were routed to a closed port for hours. These tests pin the fix at
++  // the PROCESS level: the real binary must refuse to claim a slot whose port it
++  // does not hold, and must do so by EXITING rather than by continuing unfenced.
++  // ---------------------------------------------------------------------------
++
++  const seedRoutingDb = (dbFile: string) => {
++    const seedDb = new Database(dbFile)
++    seedDb.exec("PRAGMA journal_mode=WAL;")
++    seedDb.run(ROUTING_DDL)
++    seedDb.run(
++      "INSERT OR IGNORE INTO routing_meta (id, schema_version, ddl_checksum, binary_epoch, updated_at) VALUES (1, 1, ?, 0, ?)",
++      [EXPECTED_DDL_CHECKSUM, Date.now()]
++    )
++    seedDb.close()
++  }
++
++  const readServeRow = (dbFile: string, serveId: string) => {
++    const db = new Database(dbFile)
++    db.exec("PRAGMA busy_timeout=3000;")
++    const row = db.prepare("SELECT * FROM serve_instance WHERE serve_id = ?").get(serveId) as any
++    db.close()
++    return row
++  }
++
++  // Bind port 0, read the assigned port, release it. Used so the mismatch case is
++  // deterministic (expected = bound + 1) instead of racing the port-0 fallback,
++  // which prefers 4096 before any free port.
++  const freePort = async (): Promise<number> => {
++    const net = await import("node:net")
++    return await new Promise<number>((resolve, reject) => {
++      const srv = net.createServer()
++      srv.once("error", reject)
++      srv.listen(0, "127.0.0.1", () => {
++        const port = (srv.address() as any).port as number
++        srv.close(() => resolve(port))
++      })
++    })
++  }
++
++  cliIt.live(
++    "port fence: REFUSES to claim the slot and EXITS when the bound port is not the expected port",
++    ({ opencode }) =>
++      Effect.gen(function* () {
++        const tmp = yield* Effect.promise(() => tmpdir())
++        yield* Effect.addFinalizer(() => Effect.promise(() => tmp[Symbol.asyncDispose]()))
++        const dbFile = path.join(tmp.path, "routing.db")
++        seedRoutingDb(dbFile)
++
++        const serveId = "serve-fence-mismatch"
++        const port = yield* Effect.promise(() => freePort())
++
++        // The hijack signature: this process inherited an expectation for a
++        // DIFFERENT port than the one it actually holds.
++        const server = yield* opencode.serve({
++          port,
++          env: {
++            OPENCODE_ROUTING_DB: dbFile,
++            OPENCODE_SERVE_ID: serveId,
++            OPENCODE_SERVE_EXPECTED_PORT: String(port + 1),
++          },
++        })
++        expect(server.port).toBe(port)
++
++        // It must die on its own — no kill() here. systemd would restart it, which
++        // makes a genuinely misconfigured unit crash-loop VISIBLY.
++        const exitCode = yield* Effect.promise(() => server.exited)
++        expect(exitCode).not.toBe(0)
++
++        // And crucially: the slot must be untouched. No endpoint hijack, and no
++        // instance_uuid clobber (which would 500 every prompt on the real serve).
++        expect(readServeRow(dbFile, serveId)).toBeNull()
++      }),
++    60_000,
++  )
++
++  cliIt.live(
++    "port fence: registers normally when the bound port IS the expected port",
++    ({ opencode }) =>
++      Effect.gen(function* () {
++        const tmp = yield* Effect.promise(() => tmpdir())
++        yield* Effect.addFinalizer(() => Effect.promise(() => tmp[Symbol.asyncDispose]()))
++        const dbFile = path.join(tmp.path, "routing.db")
++        seedRoutingDb(dbFile)
++
++        const serveId = "serve-fence-match"
++        const port = yield* Effect.promise(() => freePort())
++
++        const server = yield* opencode.serve({
++          port,
++          env: {
++            OPENCODE_ROUTING_DB: dbFile,
++            OPENCODE_SERVE_ID: serveId,
++            OPENCODE_SERVE_EXPECTED_PORT: String(port),
++          },
++        })
++
++        let row: any = null
++        for (let i = 0; i < 50; i++) {
++          row = readServeRow(dbFile, serveId)
++          if (row) break
++          yield* Effect.sleep("100 millis")
++        }
++
++        expect(row).toBeDefined()
++        expect(row).not.toBeNull()
++        expect(row.endpoint).toBe(`http://127.0.0.1:${port}`)
++        expect(row.health_state).toBe("healthy")
++        expect(row.draining).toBe(0)
++
++        server.kill()
++        yield* Effect.promise(() => server.exited)
++      }),
++    60_000,
++  )
++
++
++  cliIt.live(
++    "PID fence: REFUSES to claim the slot and EXITS when process PID does not match expected PID",
++    ({ opencode }) =>
++      Effect.gen(function* () {
++        const tmp = yield* Effect.promise(() => tmpdir())
++        yield* Effect.addFinalizer(() => Effect.promise(() => tmp[Symbol.asyncDispose]()))
++        const dbFile = path.join(tmp.path, "routing.db")
++        seedRoutingDb(dbFile)
++
++        const serveId = "serve-pid-fence-mismatch"
++        const port = yield* Effect.promise(() => freePort())
++
++        const server = yield* opencode.serve({
++          port,
++          env: {
++            OPENCODE_ROUTING_DB: dbFile,
++            OPENCODE_SERVE_ID: serveId,
++            OPENCODE_SERVE_EXPECTED_PORT: String(port),
++            OPENCODE_SERVE_EXPECTED_PID: "1",
++          },
++        })
++
++        // It must die on its own (exit code 21) — no kill() here.
++        const exitCode = yield* Effect.promise(() => server.exited)
++        expect(exitCode).toBe(21)
++
++        // The slot must be untouched.
++        expect(readServeRow(dbFile, serveId)).toBeNull()
++      }),
++    60_000,
++  )
++
++  cliIt.live(
++    "PID fence: registers normally when OPENCODE_SERVE_EXPECTED_PID matches process PID via wrapper exec",
++    ({ opencode }) =>
++      Effect.gen(function* () {
++        const tmp = yield* Effect.promise(() => tmpdir())
++        yield* Effect.addFinalizer(() => Effect.promise(() => tmp[Symbol.asyncDispose]()))
++        const dbFile = path.join(tmp.path, "routing.db")
++        seedRoutingDb(dbFile)
++
++        const serveId = "serve-pid-fence-match"
++        const port = yield* Effect.promise(() => freePort())
++
++        // Exec through wrapper shell: sets OPENCODE_SERVE_EXPECTED_PID=$$ then execs serve.
++        // process.pid of the serve process matches $$ exactly.
++        const server = yield* opencode.serve({
++          port,
++          exec: true,
++          env: {
++            OPENCODE_ROUTING_DB: dbFile,
++            OPENCODE_SERVE_ID: serveId,
++            OPENCODE_SERVE_EXPECTED_PORT: String(port),
++          },
++        })
++
++        let row: any = null
++        for (let i = 0; i < 50; i++) {
++          row = readServeRow(dbFile, serveId)
++          if (row) break
++          yield* Effect.sleep("100 millis")
++        }
++
++        expect(row).toBeDefined()
++        expect(row).not.toBeNull()
++        expect(row.endpoint).toBe(`http://127.0.0.1:${port}`)
++        expect(row.health_state).toBe("healthy")
++        expect(row.draining).toBe(0)
++
++        server.kill()
++        yield* Effect.promise(() => server.exited)
++      }),
++    60_000,
++  )
++
++  // ---------------------------------------------------------------------------
++  // HARNESS HERMETICITY GUARD (bead pigeon-13p).
++  //
++  // This asserts on BEHAVIOUR, not on a variable name. `serve heartbeat started`
++  // is printed by serve.ts if and only if the process took the routing branch,
++  // i.e. it self-registered into a routing registry and claimed a pool slot. If a
++  // harness-spawned serve ever prints it without the test having deliberately
++  // supplied a scratch OPENCODE_ROUTING_DB, the harness is leaking the runner's
++  // environment into children -- which, run from inside a pool session, hijacks a
++  // LIVE pool slot. That is not hypothetical: it happened on 2026-07-25 (slot
++  // serve-2 repointed to :44407 and left draining=1 while the real serve-2 was
++  // alive and beating, ~83 sessions force-reassigned).
++  //
++  // Deliberately stronger than asserting the specific vars are stripped: this
++  // catches ANY future leak path that ends in registration, including one through
++  // a variable nobody thought to add to the strip list.
++  // ---------------------------------------------------------------------------
++  cliIt.live(
++    "harness never lets a spawned serve register itself into a routing registry",
++    ({ opencode }) =>
++      Effect.gen(function* () {
++        const server = yield* opencode.serve()
++        // Give a registration (which happens right after the listening line) time
++        // to print, so absence here means absence, not just earliness.
++        yield* Effect.sleep("1500 millis")
++        const out = server.output()
++
++        expect(
++          out,
++          "a harness-spawned serve registered into a routing registry -- the harness is leaking the runner's env",
++        ).not.toContain("serve heartbeat started")
++        // The fence's unarmed warning also only prints on the routing branch.
++        expect(out).not.toContain("port fence NOT ARMED")
++
++        server.kill()
++        yield* Effect.promise(() => server.exited)
++      }),
++    60_000,
++  )
++
+ })
+diff --git a/packages/opencode/test/lib/cli-process.ts b/packages/opencode/test/lib/cli-process.ts
+index 12e8d9c..0c7260a 100644
+--- a/packages/opencode/test/lib/cli-process.ts
++++ b/packages/opencode/test/lib/cli-process.ts
+@@ -59,6 +59,46 @@ function forkStderrDrain(stream: ReadableStream<Uint8Array>, into: string[]) {
+   )
+ }
+ 
++// HERMETIC SPAWN BASE (bead pigeon-13p).
++//
++// Every builder below spreads `process.env` into the child so the real binary
++// gets a working PATH/toolchain. That inherits the RUNNER's environment too --
++// and when this suite is run from inside an opencode session that participates
++// in the serve pool, the runner's env carries OPENCODE_SERVE_ID and
++// OPENCODE_ROUTING_DB pointing at the LIVE pigeon routing DB.
++//
++// A spawned `opencode serve` with those two set self-registers: it rewrites that
++// pool slot's endpoint to the random port the test bound and clobbers its
++// instance_uuid, and on teardown its SIGTERM finalizer marks the slot draining=1.
++// The live pool then evicts every session assigned to that slot. This is not
++// hypothetical -- running the serve smoke test from an opencode session did
++// exactly that on 2026-07-25, hijacking slot serve-2 to :44407 and draining it
++// while the real serve-2 was still alive and heartbeating.
++//
++// So the base env explicitly DELETES the routing/identity vars. Tests that want
++// them (the routing-lease and port-fence tests) pass their own values through
++// `opts.env`, which is spread last and therefore still wins -- but they point at
++// a temp DB, never the live one. Neutralizing here rather than at each call site
++// means a NEW test cannot reintroduce the hazard by forgetting to opt out.
++const HOST_ROUTING_VARS = [
++  "OPENCODE_SERVE_ID",
++  "OPENCODE_ROUTING_DB",
++  "OPENCODE_SERVE_EXPECTED_PORT",
++  "OPENCODE_SERVE_EXPECTED_PID",
++  "OPENCODE_DB",
++  "OPENCODE_SESSION_ID",
++  "OPENCODE_WORKSPACE_ID",
++  "OPENCODE_EXPERIMENTAL_WORKSPACES",
++  "OPENCODE_HEARTBEAT_INTERVAL_MS",
++  "OPENCODE_DISABLE_CHANNEL_DB",
++] as const
++
++export function hermeticBaseEnv(): Record<string, string | undefined> {
++  const base: Record<string, string | undefined> = { ...process.env }
++  for (const key of HOST_ROUTING_VARS) delete base[key]
++  return base
++}
++
+ function isolatedEnv(home: string, configJson: string): Record<string, string> {
+   return {
+     OPENCODE_TEST_HOME: home,
+@@ -111,6 +151,7 @@ export type ServeOpts = SpawnOpts & {
+   readonly port?: number
+   readonly hostname?: string
+   readonly extraArgs?: string[]
++  readonly exec?: boolean
+   // How long to wait for the "listening on http://..." line before failing.
+   // Default 15s — startup is dominated by bun's transpile + plugin init, not
+   // the actual listen() call.
+@@ -128,6 +169,11 @@ export type ServeHandle = {
+   readonly kill: () => void
+   // Resolves with the exit code once the process exits. Bun returns a number.
+   readonly exited: Promise<number>
++  // Everything the child has written to stdout+stderr so far. Exposed so tests
++  // can assert on what the process DID rather than only on what it returned --
++  // in particular that a harness-spawned serve never self-registered into a
++  // routing registry (see the "serve heartbeat started" guard, bead pigeon-13p).
++  readonly output: () => string
+ }
+ 
+ // `opencode acp` speaks newline-delimited JSON-RPC over stdin/stdout. It is
+@@ -285,7 +331,7 @@ export function withCliFixture<A, E>(
+         Effect.sync(() =>
+           Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...runArgs(message, opts)], {
+             cwd: home,
+-            env: { ...process.env, ...env, ...options?.env },
++            env: { ...hermeticBaseEnv(), ...env, ...options?.env },
+             stdin: "ignore",
+             stdout: "pipe",
+             stderr: "pipe",
+@@ -319,14 +365,18 @@ export function withCliFixture<A, E>(
+       if (opts?.hostname) argv.push("--hostname", opts.hostname)
+       if (opts?.extraArgs) argv.push(...opts.extraArgs)
+ 
++      const spawnCmd = opts?.exec
++        ? ["bash", "-c", `export OPENCODE_SERVE_EXPECTED_PID=\$\$; exec bun run --conditions=browser "${cliEntry}" ${argv.map((a) => `"${a}"`).join(" ")}`]
++        : ["bun", "run", "--conditions=browser", cliEntry, ...argv]
++
+       // Acquire the subprocess; release sends SIGTERM and awaits exit on
+       // scope close. Wrapped in Effect.ignore so a flaky kill doesn't surface
+       // as a finalizer error during test teardown.
+       const proc = yield* Effect.acquireRelease(
+         Effect.sync(() =>
+-          Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
++          Bun.spawn(spawnCmd, {
+             cwd: home,
+-            env: { ...process.env, ...env, ...opts?.env },
++            env: { ...hermeticBaseEnv(), ...env, ...opts?.env },
+             stdout: "pipe",
+             stderr: "pipe",
+           }),
+@@ -348,11 +398,13 @@ export function withCliFixture<A, E>(
+       //   "opencode server listening on http://<host>:<port>"
+       const readyRe = /listening on (http:\/\/([^\s:]+):(\d+))/
+       const readyDeferred = yield* Deferred.make<{ url: string; hostname: string; port: number }>()
++      const stdoutLines: string[] = []
+       yield* Effect.forkScoped(
+         fromBunStream("stdout", () => proc.stdout).pipe(
+           Stream.decodeText(),
+           Stream.splitLines,
+           Stream.runForEach((line) => {
++            stdoutLines.push(line)
+             const m = line.match(readyRe)
+             return m ? Deferred.succeed(readyDeferred, { url: m[1], hostname: m[2], port: Number(m[3]) }) : Effect.void
+           }),
+@@ -382,6 +434,7 @@ export function withCliFixture<A, E>(
+           proc.kill()
+         },
+         exited: proc.exited as Promise<number>,
++        output: () => stdoutLines.join("\n") + "\n" + stderrChunks.join(""),
+       } satisfies ServeHandle
+     })
+ 
+@@ -397,7 +450,7 @@ export function withCliFixture<A, E>(
+         Effect.sync(() =>
+           Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
+             cwd: opts?.cwd ?? home,
+-            env: { ...process.env, ...env, ...opts?.env },
++            env: { ...hermeticBaseEnv(), ...env, ...opts?.env },
+             stdin: "pipe",
+             stdout: "pipe",
+             stderr: "pipe",
+diff --git a/packages/opencode/test/lib/hermetic-env.test.ts b/packages/opencode/test/lib/hermetic-env.test.ts
+new file mode 100644
+index 0000000..5fe1f6c
+--- /dev/null
++++ b/packages/opencode/test/lib/hermetic-env.test.ts
+@@ -0,0 +1,73 @@
++/**
++ * The CLI subprocess harness must not leak the RUNNER's serve-pool identity into
++ * spawned children (bead pigeon-13p).
++ *
++ * When this suite runs inside an opencode session that is itself a pool member,
++ * process.env carries OPENCODE_SERVE_ID and OPENCODE_ROUTING_DB pointing at the
++ * LIVE pigeon routing DB. A child `opencode serve` inheriting those registers
++ * itself into that pool slot: it repoints the slot at the test's random port,
++ * clobbers instance_uuid, and on teardown marks the slot draining=1 -- evicting
++ * every live session assigned to it. That happened for real on 2026-07-25
++ * (slot serve-2 -> :44407, draining=1, 83 sessions reassigned) by running the
++ * serve smoke test from inside a session.
++ *
++ * This is the fourth `opencode serve` spawn site on the box, and the only one
++ * that lives in this repo. The env scrub must therefore be enforced HERE, in the
++ * harness, not per-test -- a new test must not be able to reintroduce the hazard
++ * by forgetting to opt out.
++ */
++import { describe, expect, test } from "bun:test"
++import { hermeticBaseEnv } from "./cli-process"
++
++const HAZARDOUS = [
++  "OPENCODE_SERVE_ID",
++  "OPENCODE_ROUTING_DB",
++  "OPENCODE_SERVE_EXPECTED_PORT",
++  "OPENCODE_DB",
++  "OPENCODE_SESSION_ID",
++  "OPENCODE_WORKSPACE_ID",
++  "OPENCODE_EXPERIMENTAL_WORKSPACES",
++  "OPENCODE_HEARTBEAT_INTERVAL_MS",
++  "OPENCODE_DISABLE_CHANNEL_DB",
++] as const
++
++describe("cli-process hermetic base env", () => {
++  test("strips every host routing/identity var even when the runner has them set", () => {
++    const saved: Record<string, string | undefined> = {}
++    for (const key of HAZARDOUS) {
++      saved[key] = process.env[key]
++      // Simulate a runner hosted inside the live serve pool.
++      process.env[key] = `leaked-${key}`
++    }
++    try {
++      const base = hermeticBaseEnv()
++      for (const key of HAZARDOUS) {
++        expect(base[key], `${key} must not reach a spawned child`).toBeUndefined()
++        expect(Object.hasOwn(base, key), `${key} must be deleted, not set to undefined`).toBe(false)
++      }
++    } finally {
++      for (const key of HAZARDOUS) {
++        if (saved[key] === undefined) delete process.env[key]
++        else process.env[key] = saved[key]
++      }
++    }
++  })
++
++  test("still passes through the ordinary environment a child needs", () => {
++    const base = hermeticBaseEnv()
++    expect(base.PATH).toBe(process.env.PATH)
++    expect(base.HOME).toBe(process.env.HOME)
++  })
++
++  test("does not mutate the runner's own process.env", () => {
++    const saved = process.env.OPENCODE_SERVE_ID
++    process.env.OPENCODE_SERVE_ID = "serve-2"
++    try {
++      hermeticBaseEnv()
++      expect(process.env.OPENCODE_SERVE_ID).toBe("serve-2")
++    } finally {
++      if (saved === undefined) delete process.env.OPENCODE_SERVE_ID
++      else process.env.OPENCODE_SERVE_ID = saved
++    }
++  })
++})

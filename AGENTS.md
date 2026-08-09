@@ -6,7 +6,9 @@
 
 **CRITICAL:** Default bash workdir is `/home/dev/opencode-patched` (patches repo). All opencode-src git commands MUST use `workdir="/home/dev/opencode-patched/opencode-src"` to avoid accidentally resetting the wrong repo.
 
-**Build:** `OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
+**Build:** `OPENCODE_VERSION=1.18.15 OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
+- `OPENCODE_VERSION` MUST be set to a version that exists on npm (e.g., `1.18.15`), otherwise plugin dependency resolution will fail: `@opencode-ai/plugin@0.0.0-prod-...` 404s on npm.
+- After switching to a new release tag, run `bun install` first — v1.18.15+ vendors `@opencode-ai/client` as a tarball (`packages/app/vendor/`), and without it the app build fails on `@opencode-ai/client/promise` resolution.
 - Without `OPENCODE_CHANNEL=prod`, channel defaults to git branch name (non-prod), which defaults the new UI layout to `true` and hides the old UI toggle.
 - Binary output: `packages/opencode/dist/opencode-linux-x64/bin/opencode`
 - Binaries stored at: `~/.opencode/bin/`
