@@ -2,7 +2,7 @@ name: Sync Tool Fix PR Changes
 
 on:
   schedule:
-    # Every 8 hours, same as sync-cached and sync-vim-pr
+    # Every 8 hours
     - cron: '0 1,9,17 * * *'
   workflow_dispatch:
 
