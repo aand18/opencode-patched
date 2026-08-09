@@ -23,6 +23,9 @@
 
 **Workflows:**
 
+Full step-by-step runbook (fetch tag → apply → rebase → build → install → backup
+→ align fork → docs → commit): `docs/plans/2026-08-10-upgrade-procedure-opencode-and-patches.md`.
+
 Roll forward to a new upstream release:
 1. Fetch new tag into opencode-src (detached HEAD at tag; create local tag from FETCH_HEAD)
 2. Run `bun install` (v1.18.15+ vendors `@opencode-ai/client` tarball)
