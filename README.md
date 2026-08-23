@@ -6,7 +6,7 @@ onto upstream release tags. The stack is aligned with the
 patches adopted from there are rebased onto each new release here, plus
 locally-authored patches.
 
-Currently tracking **v1.18.21** (rebased 2026-08-23; 24 patches).
+Currently tracking **v1.18.21** (rebased 2026-08-23; 27 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
 
 ## Patch stack
 
@@ -17,46 +17,50 @@ is a summary.
 
 | # | Patch | Origin | What it does |
 |---|-------|--------|--------------|
-| 1 | `retry-cap.patch` | local | MAX_RETRIES=8 + backoff jitter (Vertex/Gemini runaway cure) |
-| 2 | `tool-fix.patch` | upstream PR #16751 | synthetic step-start boundaries (tool_use/result mismatch) |
-| 3 | `cache-thinking-skip.patch` | upstream PR #17883 | cache breakpoints scan past trailing thinking/reasoning blocks |
-| 4 | `step-end-diff-bound.patch` | local | bound step-end summary diff to prevent CPU pin freeze |
-| 5 | `project-copy-debounce.patch` | local | single-flight dedup + concurrency cap on `ProjectCopy.refresh` |
-| 6 | `bootstrap-disposed-filter.patch` | local | filter + debounce TUI disposed storm |
-| 7 | `available-cache.patch` | local | herd-collapse cache for CatalogV2 provider/model availability |
-| 8 | `compaction-bounded-load.patch` | local | bound prompt-loop message load to compaction window |
-| 9 | `sqlite-foreign-key-wrap.patch` | local | catch nested/wrapped FK constraints on modern error wrappers |
-| 10 | `event-session-scope.patch` | local | optional `?session_ids=` filter on `GET /event` (pool-of-K serves) |
-| 11 | `event-cold-start-directory.patch` | local | fix cold-start live-delivery race (apply after #10) |
-| 12 | `createnext-readback.patch` | local | `Session.createNext` reads durable row back after `Created` |
-| 13 | `serve-lease.patch` | local | serve-side session-lease participation (routing-lease CAS, heartbeat, fenced run loop; `OPENCODE_ROUTING_DB`-gated) |
-| 14 | `registry-port-fence.patch` | local | PID fence on serve pool slots (apply after #13) |
-| 15 | `attach-route-resolve.patch` | local | pool-aware `opencode attach` + per-attempt SSE teardown (leak fix) |
-| 16 | `globalbus-maxlisteners.patch` | local | uncap GlobalBus listener ceiling |
-| 17 | `event-log-gate.patch` | local | gate durable event log behind `OPENCODE_EXPERIMENTAL_WORKSPACES` |
-| 18 | `session-door-routes.patch` | local | `?session_ids=` on `event.subscribe` schema + session-scoped permission/question routes |
-| 19 | `session-mcp-routes.patch` | local | session-scoped MCP status/connect/disconnect routes (apply after #18) |
-| 20 | `tui-door-tests.patch` | local | client contract test for session-scoped door SDK |
-| 21 | `tui-mcp-dialog.patch` | local | MCP status/connect/disconnect dialog UI |
-| 22 | `plugin-loader-observability.patch` | local | structured plugin load-failure logging |
-| 23 | `vcs-untracked-normal.patch` | local | respect `.gitignore`, prevent VCS crash on large repos |
-| 24 | `revert-orphan-parents.patch` | local | reparent orphaned messages after `/undo` revert cleanup (upstream #38864) |
+| 1 | `tool-fix.patch` | upstream PR #16751 | synthetic step-start boundaries (tool_use/result mismatch) |
+| 2 | `cache-thinking-skip.patch` | upstream PR #17883 | cache breakpoints scan past trailing thinking/reasoning blocks |
+| 3 | `sqlite-foreign-key-wrap.patch` | local | catch nested/wrapped FK constraints on modern error wrappers |
+| 4 | `event-session-scope.patch` | local | optional `?session_ids=` filter on `GET /event` (pool-of-K serves) |
+| 5 | `createnext-readback.patch` | local | `Session.createNext` reads durable row back after `Created` |
+| 6 | `serve-lease.patch` | local | serve-side session-lease participation (routing-lease CAS, heartbeat, fenced run loop; `OPENCODE_ROUTING_DB`-gated) |
+| 7 | `attach-route-resolve.patch` | local | pool-aware `opencode attach` + per-attempt SSE teardown (leak fix) |
+| 8 | `bootstrap-disposed-filter.patch` | local | filter + debounce TUI disposed storm |
+| 9 | `event-cold-start-directory.patch` | local | fix cold-start live-delivery race (apply after #4) |
+| 10 | `project-copy-debounce.patch` | local | single-flight dedup + concurrency cap on `ProjectCopy.refresh` |
+| 11 | `step-end-diff-bound.patch` | local | bound step-end summary diff to prevent CPU pin freeze |
+| 12 | `globalbus-maxlisteners.patch` | local | uncap GlobalBus listener ceiling |
+| 13 | `event-log-gate.patch` | local | gate durable event log behind `OPENCODE_EXPERIMENTAL_WORKSPACES` |
+| 14 | `compaction-bounded-load.patch` | local | bound prompt-loop message load to compaction window |
+| 15 | `available-cache.patch` | local | herd-collapse cache for CatalogV2 provider/model availability |
+| 16 | `session-door-routes.patch` | local | `?session_ids=` on `event.subscribe` schema + session-scoped permission/question routes |
+| 17 | `tui-door-attach.patch` | parent `johnnymo87` | Phase 8 front-door TUI: session-scoped `/event?session_ids=` + door-owned REST (apply after #7) |
+| 18 | `tui-door-tests.patch` | local | client contract test for session-scoped door SDK |
+| 19 | `session-mcp-routes.patch` | local | session-scoped MCP status/connect/disconnect routes (apply after #16) |
+| 20 | `tui-mcp-dialog.patch` | local | MCP status/connect/disconnect dialog UI |
+| 21 | `tui-reconcile-bound.patch` | parent `johnnymo87` | bound TUI pending-reconcile, proceed degraded after N=3 (apply last) |
+| 22 | `registry-port-fence.patch` | local | PID fence on serve pool slots (apply after #6) |
+| 23 | `plugin-loader-observability.patch` | local | structured plugin load-failure logging |
+| 24 | `message-serve-provenance.patch` | parent `johnnymo87` | stamp serve provenance on assistant rows for sweeper (apply after #3) |
+| 25 | `db-isolation-guard.patch` | parent `johnnymo87` | refuse DB open when `XDG_DATA_HOME` isolation requested but `OPENCODE_DB` outside it |
+| 26 | `vcs-untracked-normal.patch` | local | respect `.gitignore`, prevent VCS crash on large repos (parent does not carry; kept as local safety) |
+| 27 | `revert-orphan-parents.patch` | local | reparent orphaned messages after `/undo` revert cleanup (upstream #38864; parent does not carry; kept) |
 
-Dependency constraints: #11 after #10, #14 after #13, #19 after #18.
+Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3.
 
 ## Patch details
 
 Detailed writeups for the patches shared with the upstream fork
 (johnnymo87/opencode-patched).
 
-### Retry cap (`retry-cap.patch`)
+### Adopted from parent `johnnymo87` (2026-08-23 alignment to `853da6382`)
 
-Upstream `v1.18.17+` now caps per-step retries at `RETRY_MAX_RETRIES = 5` with jitter
-(`RETRY_JITTER_FACTOR = 0.25`, `exponential()` in `packages/opencode/src/session/retry.ts:28`),
-fixing the 2026-06 Vertex/Gemini uncapped runaway. Local patch rebased for `v1.18.21`
-bumps the cap to `8` (minimal diff: `5 -> 8` + test expectation) to preserve the local
-`MAX_RETRIES=8` policy while keeping upstream's jitter. Previously also injected
-downward-only jitter (`RETRY_JITTER_RATIO = 0.2`) when upstream was uncapped.
+- **`tui-door-attach.patch` + `tui-reconcile-bound.patch`** — Phase 8 front-door TUI + bound reconcile (workstation-mlve / fdb1). Door owns `GET /event?session_ids=` and `session/` REST routing, TUI drops pigeon `/route` self-resolve; reconcile after `N=3` proceeds degraded with slow-cadence retry. Verified at `v1.18.21`: both apply clean on top of full stack, 6 + 9 files, no conflict with `attach-route-resolve`/`tui-mcp-dialog`. Heavy but order-independent except #21 last.
+
+- **`message-serve-provenance.patch`** — stamps `{serveId,invocationId,port,pid}` into assistant rows via `projector.ts:75` (gated on `OPENCODE_SERVE_ID` + `/proc/self/cgroup` containing `opencode-serve@<port>.service`), so sweeper can finalize orphans promptly instead of ~24h. Disjoint from `sqlite-foreign-key-wrap` (different hunks), applies clean at `v1.18.21`, adds 4 files/340 lines + 16 tests. Useful for phantom-busy sweeper.
+
+- **`db-isolation-guard.patch`** — `packages/core/src/database/database.ts:42` + new `isolation.ts` (incident 2026-08-14). `OPENCODE_DB` absolute wins over `XDG_DATA_HOME`, so throwaway `XDG_DATA_HOME` copy recipe left DB on prod; guard refuses when `XDG_DATA_HOME` set and `OPENCODE_DB` outside it (escape `OPENCODE_DB_ALLOW_FOREIGN_XDG=1`). Armed only when `XDG_DATA_HOME` set (prod pool has it unset), so no break. Applies clean at `v1.18.21`, order-independent, 1 + 184 lines, 14 tests.
+
+- **`retry-cap.patch` dropped** — upstream `c78986831c` in `v1.18.17` now caps at `RETRY_MAX_RETRIES=5` with `RETRY_JITTER_FACTOR=0.25` (`packages/opencode/src/session/retry.ts:31`); parent tombstone 4 says do not re-litigate `5-vs-8`. Verified at `v1.18.21`: cap present, so local `5->8` bump removed to align.
 
 ### Cache thinking-skip (`cache-thinking-skip.patch`)
 
@@ -84,28 +88,31 @@ because they modify disjoint regions):
 
 | Patch | Files |
 |-------|-------|
-| retry-cap | `session/retry.ts`, `test/session/retry.test.ts` |
 | tool-fix | `session/message-v2.ts`, `test/session/message-v2.test.ts` |
 | cache-thinking-skip | `provider/transform.ts` |
-| step-end-diff-bound | `snapshot/index.ts` |
-| project-copy-debounce | `core/src/project/copy.ts` + test |
-| bootstrap-disposed-filter | `tui/context/sync.tsx` |
-| available-cache | `core/src/catalog.ts` + test |
-| compaction-bounded-load | `session/message-v2.ts` + test (same file as tool-fix, disjoint region) |
 | sqlite-foreign-key-wrap | `core/src/session/projector.ts` |
 | event-session-scope | `httpapi/handlers/event.ts` + test |
 | event-cold-start-directory | `httpapi/handlers/event.ts` (same file as event-session-scope) |
 | createnext-readback | `session/session.ts` + test |
 | serve-lease | `core/src/flag`, `cli/cmd/serve.ts`, `session/prompt.ts`, serve-process tests |
-| registry-port-fence | extends serve-lease files (`core/src/serve/routing-lease.ts`, `serve.ts`, flag) |
 | attach-route-resolve | `cli/cmd/attach.ts`, `tui/app.tsx`, `tui/context/sdk.tsx` |
+| bootstrap-disposed-filter | `tui/context/sync.tsx` |
+| project-copy-debounce | `core/src/project/copy.ts` + test |
+| step-end-diff-bound | `snapshot/index.ts` |
 | globalbus-maxlisteners | `bus/global.ts` |
 | event-log-gate | `core/src/event.ts` |
+| compaction-bounded-load | `session/message-v2.ts` + test (same file as tool-fix, disjoint region) |
+| available-cache | `core/src/catalog.ts` + test |
 | session-door-routes | `httpapi/groups/{event,session}.ts`, sdk gen files |
-| session-mcp-routes | same files as session-door-routes (disjoint regions) |
+| tui-door-attach | `cli/cmd/attach.ts`, `tui/context/sdk.tsx`, `tui/context/sync.tsx`, `tui/util/sse.ts` + `permission`/`question` routes |
 | tui-door-tests | new client contract test |
+| session-mcp-routes | same files as session-door-routes (disjoint regions) |
 | tui-mcp-dialog | `dialog-mcp.tsx`, `context/{sync,local}.tsx`, `util/session.ts` |
+| tui-reconcile-bound | `tui/util/reconcile.ts` (new), `tui/util/sse.ts`, `tui/context/{sdk,sync}.tsx` + tests |
+| registry-port-fence | extends serve-lease files (`core/src/serve/routing-lease.ts`, `serve.ts`, flag) |
 | plugin-loader-observability | `plugin/index.ts` |
+| message-serve-provenance | `core/src/session/projector.ts` (disjoint from sqlite-foreign-key-wrap), `schema/src/v1/session.ts` + tests |
+| db-isolation-guard | `core/src/database/database.ts`, new `core/src/database/isolation.ts` + test |
 | vcs-untracked-normal | `git/index.ts` |
 | revert-orphan-parents | `session/revert.ts` |
 
@@ -113,11 +120,12 @@ because they modify disjoint regions):
 
 Full ledger with reasons lives in the `patches/apply.sh` header. Highlights:
 
+- `retry-cap.patch` — dropped 2026-08-23 to align with parent (upstreamed `c78986831c` in `v1.18.17`, `MAX=5` stricter than local `8`; parent tombstone 4)
 - `prompt-loop-cache.patch` (#25367) + `cache-aligned-compaction.patch` (#25100) — dropped by upstream, pending a measured cache-economics pass
 - `mcp-reconnect.patch` — incompatible with OAuth-aware MCP in v1.17+; upstream removed it too
 - `eager-input-streaming.patch`, `prefill-fix.patch` — merged upstream
 - `caching.patch` — dropped by upstream (opencode-cached PR #5422)
-- `gemini-empty-parts.patch`, `vim.patch`, `opus5-adaptive-thinking.patch` — removed by user preference (upstream still carries some)
+- `gemini-empty-parts.patch`, `vim.patch`, `opus5-adaptive-thinking.patch` — **USER-REQUESTED EXCLUSIONS** (upstream still carries; we drop per user preference, documented in `AGENTS.md:42`)
 - `tui-follow-owner.patch`, `integration-list-batch.patch`, `instance-state-partition.patch` — upstream removed them
 
 ## Installation
@@ -158,7 +166,7 @@ OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod \
 1. Fetch the new tag into `opencode-src`; verify with `git apply --check` on a clean checkout.
 2. Run `bun install` before the first build (newer builds vendor `@opencode-ai/client`).
 3. `./patches/apply.sh` — any failure means the corresponding patch needs a rebase.
-   Rebase, then verify a fresh clone applies 24/24 and builds.
+   Rebase, then verify a fresh clone applies 27/27 and builds.
 4. Install the binary with a versioned name and back up `~/.local/share/opencode/opencode.db`.
 5. Update the version pins in `AGENTS.md`, this README, and the `apply.sh` header.
 6. Commit and push.
@@ -168,7 +176,7 @@ OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod \
 The upstream fork carries patches ahead of upstream opencode. Periodically:
 
 1. `git fetch upstream` (johnnymo87) and diff `upstream/main`'s `patches/` against ours.
-2. Decide per patch: **adopt** (rebased here), **skip** (applies/rebases with heavy friction, e.g. `tui-door-attach`, `tui-reconcile-bound`, which depend on upstream architecture not present in older tags), or **drop** (user preference).
+2. Decide per patch: **adopt** (rebased here), **skip** (only if heavy friction and verified at current tag), or **drop** (user preference; documented in `AGENTS.md:42` + `apply.sh` header). As of `2026-08-23` we align fully to parent except user exclusions (`gemini-empty-parts`, `vim`, `opus5`).
 3. Update the `apply.sh` header (patch set + dropped ledger) and the table above.
 4. Verify: clean-clone apply + build before committing.
 
@@ -177,10 +185,7 @@ The upstream fork carries patches ahead of upstream opencode. Periodically:
 `apply.sh` fails on the first patch that doesn't apply; that's the one needing a rebase.
 Behavioral guides per patch:
 
-- **retry-cap**: re-derive the `MAX_RETRIES` cap + jitter logic against the new
-  `packages/opencode/src/session/retry.ts`. Verify with
-  `bun test test/session/retry.test.ts` from `packages/opencode`. Drop if upstream ever
-  caps retries natively.
+- **retry-cap**: **DROPPED** as of `2026-08-23` (upstreamed `c78986831c`); if upstream changes cap, no action needed. Previously: re-derive `MAX_RETRIES` cap + jitter against `packages/opencode/src/session/retry.ts`, verify with `bun test test/session/retry.test.ts`.
 - **cache-thinking-skip**: re-derive the backward-scan hunk against the new
   `applyCaching` in `provider/transform.ts` (replace the blind last-block breakpoint
   pick with a scan past `reasoning`/`redacted-reasoning`/`tool-approval-*` blocks).
