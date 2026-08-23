@@ -6,7 +6,7 @@ onto upstream release tags. The stack is aligned with the
 patches adopted from there are rebased onto each new release here, plus
 locally-authored patches.
 
-Currently tracking **v1.18.15** (rebased 2026-08-09; 24 patches).
+Currently tracking **v1.18.21** (rebased 2026-08-23; 24 patches).
 
 ## Patch stack
 
@@ -51,13 +51,12 @@ Detailed writeups for the patches shared with the upstream fork
 
 ### Retry cap (`retry-cap.patch`)
 
-Caps per-step model-stream re-issues at `MAX_RETRIES = 8`. Each retry is a full,
-billable provider request, so an uncapped schedule turned any persistently-retryable
-condition into an unbounded burst of provider calls — the runaway behind the 2026-06
-Vertex/Gemini cost surge. Also adds *downward-only* jitter (`RETRY_JITTER_RATIO = 0.2`)
-to the no-header exponential backoff so concurrent stuck sessions don't re-issue their
-streams in lockstep against a shared quota (thundering herd). Explicit `retry-after` /
-`retry-after-ms` hints are honored exactly and never jittered.
+Upstream `v1.18.17+` now caps per-step retries at `RETRY_MAX_RETRIES = 5` with jitter
+(`RETRY_JITTER_FACTOR = 0.25`, `exponential()` in `packages/opencode/src/session/retry.ts:28`),
+fixing the 2026-06 Vertex/Gemini uncapped runaway. Local patch rebased for `v1.18.21`
+bumps the cap to `8` (minimal diff: `5 -> 8` + test expectation) to preserve the local
+`MAX_RETRIES=8` policy while keeping upstream's jitter. Previously also injected
+downward-only jitter (`RETRY_JITTER_RATIO = 0.2`) when upstream was uncapped.
 
 ### Cache thinking-skip (`cache-thinking-skip.patch`)
 
@@ -139,14 +138,14 @@ opencode --version
 ```bash
 # source clone (separate from this repo) checked out at the target tag
 git clone https://github.com/anomalyco/opencode.git opencode-src
-git -C opencode-src checkout v1.18.15
+git -C opencode-src checkout v1.18.21
 
 # apply the patch stack
 ./patches/apply.sh opencode-src            # must print "All patches applied successfully"
 
 # build (bun install is REQUIRED for v1.18.15+ — vendored @opencode-ai/client tarball)
 bun install --cwd opencode-src
-OPENCODE_VERSION=1.18.15 OPENCODE_CHANNEL=prod \
+OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod \
   bun run --cwd opencode-src/packages/opencode build
 
 # binary lands at opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode

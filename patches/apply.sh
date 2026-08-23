@@ -2,11 +2,13 @@
 # Apply local patches to opencode source for the v1.18 release line.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
-# TARGET UPSTREAM: opencode v1.18.15
+# TARGET UPSTREAM: opencode v1.18.21
 #
 # PATCH SET (v1.18 line; rebased 2026-07-20 from the v1.17 line,
-# rolled forward v1.18.3 -> v1.18.15 on 2026-08-09;
+# rolled forward v1.18.3 -> v1.18.15 on 2026-08-09 -> v1.18.21 on 2026-08-23;
 # additions folded in 2026-08-09 from johnnymo87/opencode-patched upstream/main):
+#   Notes for v1.18.21: retry-cap rebased — upstream now caps at RETRY_MAX_RETRIES=5
+#     with jitter (commit c78986831c etc.); local patch bumps to 8 (minimal diff).
 #   1. retry-cap.patch          (local)     - MAX_RETRIES=8 + backoff jitter (Vertex/Gemini runaway cure)
 #   2. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   3. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
@@ -64,7 +66,7 @@ if [ $# -ne 1 ]; then
 fi
 
 SOURCE_DIR="$1"
-SCRIPT_DIR="$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PATCH_NAMES=(
   retry-cap
