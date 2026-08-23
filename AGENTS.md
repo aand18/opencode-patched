@@ -36,7 +36,7 @@ Roll forward to a new upstream release:
 
 Align with johnnymo87/opencode-patched upstream/main:
 1. `git fetch upstream` (johnnymo87) in patches repo; diff `upstream/main` patches vs ours
-2. Per patch: adopt (rebased into our stack) / skip (heavy rebase friction, e.g. tui-door-attach, tui-reconcile-bound) / drop (user preference — gemini-empty-parts, vim, opus5-adaptive-thinking)
+2. Per patch: adopt (rebased into our stack) / skip only if heavy rebase friction with explicit justification / drop only if upstream dropped. **Policy (2026-08-23): keep parent's changes, no divergence without explicit reason — adopt all parent patches (including gemini-empty-parts, vim, tui-door-attach, tui-reconcile-bound, db-isolation-guard, message-serve-provenance); drop local patches that parent removed (retry-cap, etc.) unless proven still needed.**
 3. Update `apply.sh` header + README table; verify clean-clone apply + build before committing
 
 **Gotchas:**
