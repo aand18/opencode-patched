@@ -44,6 +44,7 @@ is a summary.
 | 25 | `db-isolation-guard.patch` | parent `johnnymo87` | refuse DB open when `XDG_DATA_HOME` isolation requested but `OPENCODE_DB` outside it |
 | 26 | `vcs-untracked-normal.patch` | local | respect `.gitignore`, prevent VCS crash on large repos (parent does not carry; kept as local safety) |
 | 27 | `revert-orphan-parents.patch` | local | reparent orphaned messages after `/undo` revert cleanup (upstream #38864; parent does not carry; kept) |
+| 28 | `status-popover-widen.patch` | local | widen status popover 360px → 600px so plugin/MCP identifiers aren't truncated to their URL/path prefix |
 
 Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3.
 
@@ -81,6 +82,18 @@ Fixes the widespread `tool_use ids were found without tool_result blocks` error
 when stream errors cause lost step boundaries. Injects synthetic step-start boundaries
 at message reconstruction time in `packages/opencode/src/session/message-v2.ts`.
 
+### Local: status popover widen (`status-popover-widen.patch`)
+
+Status popover plugin/MCP/LSP list truncated raw specifiers from the right — keeping
+the redundant URL/path prefix and cutting the informative name at the end. Widens the
+popover 360px → 600px (7 real specifiers measured 372–474px at `text-14-regular`, so
+~120px headroom; ≥530px is the floor). Rejected alternatives: `break-words` (URLs have
+no spaces → overflow), `break-all` (forces 2 lines per entry, list 2× taller), and
+name-extraction (changes displayed content, loses the path). The width is duplicated in
+six places (old-layout + V2 popover classes + 2 Suspense fallbacks + 2 body
+containers) and must stay in sync; placement `bottom-end` + `shift -168` stays anchored
+with the wider panel, `max-w-[calc(100vw-40px)]` clamps narrow viewports.
+
 ## Patch independence
 
 Files touched per patch (from patch headers; overlaps apply cleanly in `apply.sh` order
@@ -115,6 +128,7 @@ because they modify disjoint regions):
 | db-isolation-guard | `core/src/database/database.ts`, new `core/src/database/isolation.ts` + test |
 | vcs-untracked-normal | `git/index.ts` |
 | revert-orphan-parents | `session/revert.ts` |
+| status-popover-widen | `app/src/components/status-popover.tsx`, `app/src/components/status-popover-body.tsx` |
 
 ## Dropped patches
 

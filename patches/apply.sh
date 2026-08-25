@@ -48,6 +48,15 @@
 #       (parent does not carry; kept as local safety — upstream #33928/#21699/#3176 still present at v1.18.21)
 #   27. revert-orphan-parents.patch  (local) - reparent orphaned assistant messages after /undo revert cleanup (upstream #38864)
 #       (parent does not carry; kept as local safety — still useful at v1.18.21)
+#   28. status-popover-widen.patch   (local) - widen status popover 360px -> 600px so plugin/MCP identifiers
+#       are not truncated to their URL/path prefix (informative name is at the end); order-independent
+#       Sizing basis: 7 real specifiers measured at text-14-regular = 372-474px (longest: git URL); 600px
+#       leaves ~120px headroom, >=530px is the floor. Width is duplicated in SIX places and must stay in
+#       sync (else 360->600 jump on lazy-load / narrow V2): status-popover.tsx old-layout + V2 popover
+#       classes + 2 Suspense fallbacks, status-popover-body.tsx 2 body containers. Placement bottom-end +
+#       shift -168 stays anchored (panel extends left); max-w-[calc(100vw-40px)] clamps narrow viewports.
+#       Rejected: break-words (URLs have no spaces -> overflow), break-all (2 lines per entry -> list 2x
+#       taller), name-extraction (changes displayed content, loses the path).
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -105,6 +114,7 @@ PATCH_NAMES=(
   db-isolation-guard
   vcs-untracked-normal
   revert-orphan-parents
+  status-popover-widen
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then

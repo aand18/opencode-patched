@@ -29,7 +29,7 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 Roll forward to a new upstream release:
 1. Fetch new tag into opencode-src (detached HEAD at tag; create local tag from FETCH_HEAD)
 2. Run `bun install` (v1.18.15+ vendors `@opencode-ai/client` tarball)
-3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply 27/27
+3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (28/28 at v1.18.21)
 4. Build, install binary (versioned name + `.bak.{TIMESTAMP}` DB backup)
 5. Update version pins: `AGENTS.md`, `README.md`, `apply.sh` header
 6. Commit in patches repo only (never commit in opencode-src)
@@ -41,6 +41,14 @@ Align with johnnymo87/opencode-patched upstream/main:
    - All other parent patches are adopted (as of 2026-08-23: `db-isolation-guard`, `message-serve-provenance`, `tui-door-attach`, `tui-reconcile-bound` all adopted; `retry-cap` dropped as upstreamed `c78986831c` with stricter `MAX=5`).
    - Local-only patches kept as safety (parent does not carry, still useful at v1.18.21): `vcs-untracked-normal` (VCS crash), `revert-orphan-parents` (#38864).
 3. Update `apply.sh` header + README table; verify clean-clone apply + build before committing
+
+New UI patches (web app): verify cosmetics live BEFORE cutting the patch — swap
+classes in the running app via chrome-devtools `evaluate_script` and measure the
+result (e.g. element `scrollWidth` vs `offsetWidth`), which is much cheaper than a
+build/install cycle. Tailwind arbitrary-value classes (`w-[360px]`) beat non-important
+inline `style` in live DOM tests — use `!important` to override them. Record the
+measured sizing basis (real strings + max width) in the `apply.sh` header comment so
+rebase/re-derivation has a why, not a guess.
 
 **Gotchas:**
 - opencode-src working tree is dirty with patch changes (by design); never `git checkout .` / `git reset` it
