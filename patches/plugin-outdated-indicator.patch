@@ -1,0 +1,1454 @@
+diff --git a/packages/app/src/components/status-popover-body.tsx b/packages/app/src/components/status-popover-body.tsx
+index b97576ed3..8487e717e 100644
+--- a/packages/app/src/components/status-popover-body.tsx
++++ b/packages/app/src/components/status-popover-body.tsx
+@@ -1,11 +1,25 @@
+ import { Button } from "@opencode-ai/ui/button"
+ import { useDialog } from "@opencode-ai/ui/context/dialog"
++import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
+ import { Icon } from "@opencode-ai/ui/icon"
++import { IconButton } from "@opencode-ai/ui/icon-button"
++import { Spinner } from "@opencode-ai/ui/spinner"
+ import { Switch } from "@opencode-ai/ui/switch"
+ import { Tabs } from "@opencode-ai/ui/tabs"
++import type { PluginGetResponses } from "@opencode-ai/sdk/v2/client"
+ import { showToast } from "@/utils/toast"
+ import { useNavigate } from "@solidjs/router"
+-import { type Accessor, createEffect, createMemo, For, type JSXElement, onCleanup, Show } from "solid-js"
++import {
++  type Accessor,
++  createEffect,
++  createMemo,
++  createSignal,
++  For,
++  on,
++  type JSXElement,
++  onCleanup,
++  Show,
++} from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { ServerHealthIndicator, ServerRow } from "@/components/server/server-row"
+ import { useLanguage } from "@/context/language"
+@@ -16,8 +30,11 @@ import { type ServerHealth } from "@/utils/server-health"
+ import { useGlobal } from "@/context/global"
+ import { useSettings } from "@/context/settings"
+ import { useMcpToggle } from "@/context/mcp"
++import { useSDK } from "@/context/sdk"
+ import { useServerProtocol } from "@/context/server-sdk"
+ 
++type PluginItem = PluginGetResponses[200][number]
++
+ const pluginEmptyMessage = (value: string, file: string): JSXElement => {
+   const parts = value.split(file)
+   if (parts.length === 1) return value
+@@ -259,6 +276,12 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
+   const navigate = useNavigate()
+   const settings = useSettings()
+   const protocol = useServerProtocol()
++  const sdk = useSDK()
++  const [pluginTab, setPluginTab] = createSignal(false)
++  const [pluginState, setPluginState] = createStore<{
++    info: Record<string, PluginItem>
++    pending: Record<string, boolean>
++  }>({ info: {}, pending: {} })
+ 
+   const fail = (err: unknown) => {
+     showToast({
+@@ -297,6 +320,44 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
+   const pluginCount = createMemo(() => plugins().length)
+   const pluginEmpty = createMemo(() => pluginEmptyMessage(language.t("dialog.plugins.empty"), "opencode.json"))
+ 
++  const updatePlugin = (spec: string, version: string) => {
++    setPluginState("pending", spec, true)
++    void sdk()
++      .client.plugin.update({ spec, version })
++      .then(() => sdk().client.plugin.get())
++      .then((res) => {
++        setPluginState("info", Object.fromEntries((res.data ?? []).map((item) => [item.spec, item] as const)))
++      })
++      .catch((err: unknown) => {
++        showToast({
++          variant: "error",
++          title: language.t("status.popover.plugin.updateFailed"),
++          description: err instanceof Error ? err.message : String(err),
++        })
++      })
++      .finally(() => setPluginState("pending", spec, false))
++  }
++
++  createEffect(
++    on(
++      () => props.shown() && protocol() === "v1" && pluginTab(),
++      (shown) => {
++        if (!shown) return
++        let dead = false
++        onCleanup(() => {
++          dead = true
++        })
++        void sdk()
++          .client.plugin.get()
++          .then((res) => {
++            if (dead) return
++            setPluginState("info", Object.fromEntries((res.data ?? []).map((item) => [item.spec, item] as const)))
++          })
++          .catch(() => undefined)
++      },
++    ),
++  )
++
+   return (
+     <div class="flex items-center gap-1 w-[600px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
+       <Tabs
+@@ -305,6 +366,7 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
+         data-component="tabs"
+         data-active={settings.general.newLayoutDesigns() ? "mcp" : "servers"}
+         defaultValue={settings.general.newLayoutDesigns() ? "mcp" : "servers"}
++        onChange={(value) => setPluginTab(value === "plugins")}
+         variant="alt"
+       >
+         <Tabs.List data-slot="tablist" class="bg-transparent border-b-0 px-4 pt-2 pb-0 gap-4 h-10">
+@@ -496,12 +558,90 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
+                   fallback={<div class="text-14-regular text-text-base text-center my-auto">{pluginEmpty()}</div>}
+                 >
+                   <For each={plugins()}>
+-                    {(plugin) => (
+-                      <div class="flex items-center gap-2 w-full px-2 py-1">
+-                        <div class="size-1.5 rounded-full shrink-0 bg-icon-success-base" />
+-                        <span class="text-14-regular text-text-base truncate">{plugin}</span>
+-                      </div>
+-                    )}
++                    {(plugin) => {
++                      const info = () => pluginState.info[plugin]
++                      const pending = () => pluginState.pending[plugin] === true
++                      const outdated = () => info()?.outdated === true
++                      const url = () => info()?.url
++                      const badge = () => info()?.installed ?? info()?.commit
++                      const versions = () => info()?.versions ?? []
++                      return (
++                        <div class="flex items-start gap-2 w-full px-2 py-1">
++                          <div
++                            classList={{
++                              "size-1.5 rounded-full shrink-0 mt-[7px]": true,
++                              "bg-icon-critical-base": outdated(),
++                              "bg-icon-success-base": !outdated(),
++                            }}
++                          />
++                          <span class="text-14-regular text-text-base min-w-0 flex-1 break-words">
++                            <Show when={url()} fallback={plugin}>
++                              {(value) => (
++                                <a
++                                  href={value()}
++                                  target="_blank"
++                                  rel="noopener noreferrer"
++                                  class="hover:underline"
++                                  aria-label={language.t("status.popover.plugin.open")}
++                                >
++                                  {plugin}
++                                </a>
++                              )}
++                            </Show>
++                          </span>
++                          <Show when={versions().length > 0}>
++                            <div
++                              class="flex items-center gap-1 shrink-0"
++                              onMouseDown={(event) => event.stopPropagation()}
++                              onClick={(event) => event.stopPropagation()}
++                            >
++                              <Show when={badge()}>
++                                <span class="text-12-regular text-text-weak shrink-0">{badge()}</span>
++                              </Show>
++                              <DropdownMenu gutter={4} placement="bottom-end">
++                                <DropdownMenu.Trigger
++                                  as={IconButton}
++                                  icon="chevron-down"
++                                  variant="ghost"
++                                  size="small"
++                                  class="size-6 rounded-md"
++                                  aria-label={language.t("status.popover.plugin.selectVersion")}
++                                />
++                                <DropdownMenu.Portal>
++                                  <DropdownMenu.Content>
++                                    <DropdownMenu.RadioGroup value={badge()}>
++                                      <For each={versions()}>
++                                        {(version) => (
++                                          <DropdownMenu.RadioItem
++                                            value={version}
++                                            closeOnSelect
++                                            disabled={pending()}
++                                            onSelect={() => updatePlugin(plugin, version)}
++                                          >
++                                            <DropdownMenu.ItemLabel class="min-w-0 truncate">{version}</DropdownMenu.ItemLabel>
++                                            <Show when={version === info()?.latest}>
++                                              <span class="text-11-regular text-text-weak shrink-0">
++                                                {language.t("status.popover.plugin.latest")}
++                                              </span>
++                                            </Show>
++                                            <DropdownMenu.ItemIndicator>
++                                              <Icon name="check-small" size="small" class="text-icon-weak" />
++                                            </DropdownMenu.ItemIndicator>
++                                          </DropdownMenu.RadioItem>
++                                        )}
++                                      </For>
++                                    </DropdownMenu.RadioGroup>
++                                  </DropdownMenu.Content>
++                                </DropdownMenu.Portal>
++                              </DropdownMenu>
++                              <Show when={pending()}>
++                                <Spinner class="size-3 shrink-0" />
++                              </Show>
++                            </div>
++                          </Show>
++                        </div>
++                      )
++                    }}
+                   </For>
+                 </Show>
+               </div>
+diff --git a/packages/app/src/i18n/en.ts b/packages/app/src/i18n/en.ts
+index 62d4dc1ae..742c9bbc9 100644
+--- a/packages/app/src/i18n/en.ts
++++ b/packages/app/src/i18n/en.ts
+@@ -770,6 +770,10 @@ export const dict = {
+   "status.popover.tab.lsp": "LSP",
+   "status.popover.tab.plugins": "Plugins",
+   "status.popover.action.manageServers": "Manage servers",
++  "status.popover.plugin.updateFailed": "Update failed",
++  "status.popover.plugin.selectVersion": "Select version",
++  "status.popover.plugin.latest": "Latest",
++  "status.popover.plugin.open": "Open",
+ 
+   "session.share.popover.title": "Publish on web",
+   "session.share.popover.description.shared":
+diff --git a/packages/opencode/src/plugin/info.ts b/packages/opencode/src/plugin/info.ts
+new file mode 100644
+index 000000000..31401e0ca
+--- /dev/null
++++ b/packages/opencode/src/plugin/info.ts
+@@ -0,0 +1,372 @@
++import path from "path"
++import { fileURLToPath } from "url"
++import npa from "npm-package-arg"
++import semver from "semver"
++import { applyEdits, modify, parse } from "jsonc-parser"
++import { Context, Effect, Layer, Option, Scope, Schema, Types } from "effect"
++import { ChildProcess } from "effect/unstable/process"
++import { HttpClient, HttpClientRequest } from "effect/unstable/http"
++import { AppProcess } from "@opencode-ai/core/process"
++import { FSUtil } from "@opencode-ai/core/fs-util"
++import { Global } from "@opencode-ai/core/global"
++import { Npm } from "@opencode-ai/core/npm"
++import { LayerNode } from "@opencode-ai/core/effect/layer-node"
++import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
++import { serviceUse } from "@opencode-ai/core/effect/service-use"
++import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
++import { Config } from "@/config/config"
++import { ConfigPlugin } from "@/config/plugin"
++import { isPathPluginSpec } from "./shared"
++
++export type PluginKind = "git" | "npm" | "path"
++
++export type PluginClass = {
++  readonly kind: PluginKind
++  readonly name: string
++  readonly url: string | null
++  readonly committish: string | null
++}
++
++export type PluginRemote = {
++  readonly latest: string | null
++  readonly versions: string[]
++}
++
++export const PluginInfoItem = Schema.Struct({
++  spec: Schema.String,
++  kind: Schema.Literals(["git", "npm", "path"]),
++  name: Schema.String,
++  url: Schema.optional(Schema.String),
++  installed: Schema.optional(Schema.String),
++  commit: Schema.optional(Schema.String),
++  latest: Schema.optional(Schema.String),
++  outdated: Schema.optional(Schema.Boolean),
++  versions: Schema.Array(Schema.String),
++})
++export type PluginInfoItem = Types.DeepMutable<Schema.Schema.Type<typeof PluginInfoItem>>
++
++export const UpdateInput = Schema.Struct({
++  spec: Schema.String,
++  version: Schema.String,
++})
++export type UpdateInput = Types.DeepMutable<Schema.Schema.Type<typeof UpdateInput>>
++
++export class PluginUpdateError extends Schema.TaggedErrorClass<PluginUpdateError>()("PluginUpdateError", {
++  message: Schema.String,
++}) {}
++
++export interface Interface {
++  readonly list: () => Effect.Effect<PluginInfoItem[]>
++  readonly update: (
++    input: { readonly spec: string; readonly version: string },
++  ) => Effect.Effect<PluginInfoItem, PluginUpdateError>
++}
++
++export class Service extends Context.Service<Service, Interface>()("@opencode/PluginInfo") {}
++
++export const use = serviceUse(Service)
++
++export function classify(spec: string): PluginClass {
++  if (isPathPluginSpec(spec)) {
++    const raw = spec.startsWith("file://") ? fileURLToPath(spec) : spec
++    return { kind: "path", name: path.basename(raw), url: null, committish: null }
++  }
++  const fallback: PluginClass = {
++    kind: "npm",
++    name: spec,
++    url: `https://www.npmjs.com/package/${spec}`,
++    committish: null,
++  }
++  let hit: npa.Result | undefined
++  try {
++    hit = npa(spec)
++  } catch {
++    return fallback
++  }
++  const sub = hit.type === "alias" ? (hit as npa.AliasResult).subSpec : undefined
++  const inner = sub !== undefined ? sub : hit
++  if (inner.type === "git") {
++    const gitUrl =
++      inner.fetchSpec ??
++      (inner.hosted ? `https://${inner.hosted.domain}/${inner.hosted.user}/${inner.hosted.project}` : null)
++    const home = gitUrl === null ? null : gitUrl.replace(/^git\+/, "").replace(/\.git$/, "")
++    return {
++      kind: "git",
++      name: inner.name ?? (home !== null ? path.basename(home) : spec),
++      url: home,
++      committish: inner.gitCommittish ?? null,
++    }
++  }
++  const name = hit.name ?? spec
++  return { kind: "npm", name, url: `https://www.npmjs.com/package/${name}`, committish: null }
++}
++
++export function updateSpec(spec: string, version: string): string {
++  const cls = classify(spec)
++  if (cls.kind === "path") return spec
++  if (cls.kind === "git") {
++    const at = spec.lastIndexOf("#")
++    return `${at === -1 ? spec : spec.slice(0, at)}#${version}`
++  }
++  return `${cls.name}@${version}`
++}
++
++export function parseTags(output: string): PluginRemote | null {
++  const tags = new Set(
++    output
++      .split("\n")
++      .map((line) => {
++        const at = line.indexOf("\t")
++        return at === -1 ? null : line.slice(at + 1).trim()
++      })
++      .filter((ref): ref is string => ref !== null && ref.startsWith("refs/tags/"))
++      .map((ref) => ref.slice("refs/tags/".length))
++      .filter((tag) => !tag.endsWith("^{}")),
++  )
++  const ranked = [...tags]
++    .map((tag) => ({ tag, semver: semver.parse(tag) }))
++    .filter((item): item is { tag: string; semver: semver.SemVer } => item.semver !== null)
++  if (ranked.length === 0) return null
++  ranked.sort((a, b) => semver.rcompare(a.semver, b.semver))
++  const stable = ranked.find((item) => item.semver.prerelease.length === 0)
++  return {
++    latest: semver.clean(stable?.tag ?? ranked[0].tag) ?? null,
++    versions: ranked.slice(0, 10).map((item) => item.tag),
++  }
++}
++
++export function parseNpmRegistry(doc: unknown): PluginRemote | null {
++  if (typeof doc !== "object" || doc === null) return null
++  const record = doc as Record<string, unknown>
++  const distTags = record["dist-tags"]
++  const distLatest =
++    distTags !== null && typeof distTags === "object" ? (distTags as Record<string, unknown>)["latest"] : undefined
++  const latest = typeof distLatest === "string" ? distLatest : null
++  const versions = record["versions"]
++  if (versions === null || typeof versions !== "object") return null
++  const ranked = Object.keys(versions as Record<string, unknown>)
++    .map((key) => ({ key, semver: semver.parse(key) }))
++    .filter((item): item is { key: string; semver: semver.SemVer } => item.semver !== null)
++  if (ranked.length === 0) return null
++  ranked.sort((a, b) => semver.rcompare(a.semver, b.semver))
++  const stable = ranked.find((item) => item.semver.prerelease.length === 0)
++  return {
++    latest: latest ?? stable?.key ?? ranked[0].key,
++    versions: ranked.slice(0, 10).map((item) => item.key),
++  }
++}
++
++export function isOutdated(installed: string | null | undefined, latest: string | null | undefined): boolean | null {
++  if (installed === null || installed === undefined || latest === null || latest === undefined) return null
++  const a = semver.parse(installed)
++  const b = semver.parse(latest)
++  if (a === null || b === null) return null
++  return semver.lt(a, b)
++}
++
++export function rewritePluginSpec(text: string, oldSpec: string, newSpec: string): string | undefined {
++  const json = parse(text, []) as { plugin?: unknown }
++  const list = json?.plugin
++  if (!Array.isArray(list)) return undefined
++  const index = list.findIndex((item) => ConfigPlugin.pluginSpecifier(item as ConfigPluginV1.Spec) === oldSpec)
++  if (index === -1) return undefined
++  const entry = list[index]
++  const value = Array.isArray(entry) ? [newSpec, ...entry.slice(1)] : newSpec
++  return applyEdits(text, modify(text, ["plugin", index], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }))
++}
++
++export type Deps = {
++  readonly config: Config.Interface
++  readonly global: Global.Interface
++  readonly fs: FSUtil.Interface
++  readonly spawner: AppProcess.Interface
++  readonly http: HttpClient.HttpClient
++  readonly scope: Scope.Scope
++}
++
++const TTL = 15 * 60 * 1000
++const REMOTE_TIMEOUT = 10_000
++
++// Matches the install cache key derivation in resolvePluginTarget (shared.ts):
++// bare npm names are cached under `name@latest`, everything else under the raw spec.
++function cacheKey(spec: string): string {
++  let hit: npa.Result | undefined
++  try {
++    hit = npa(spec)
++  } catch {
++    return spec
++  }
++  return hit?.name && hit.raw === hit.name ? `${hit.name}@latest` : spec
++}
++
++export function makeService(deps: Deps): Interface {
++  const cache = new Map<string, { at: number; item: PluginInfoItem }>()
++
++  const packageJsonCandidates = (spec: string, cls: PluginClass): string[] => {
++    if (cls.kind === "path") {
++      const raw = spec.startsWith("file://") ? fileURLToPath(spec) : spec
++      return [path.join(raw, "package.json"), path.join(path.dirname(raw), "package.json")]
++    }
++    const base = path.join(deps.global.cache, "packages", Npm.sanitize(cacheKey(spec)))
++    return [path.join(base, "node_modules", cls.name, "package.json"), path.join(base, "package.json")]
++  }
++
++  const readPackageJson = Effect.fnUntraced(function* (file: string) {
++    const text = yield* deps.fs.readFileStringSafe(file).pipe(Effect.catch(() => Effect.succeed(undefined)))
++    if (text === undefined) return undefined
++    const doc = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text)
++    if (Option.isNone(doc)) return undefined
++    return doc.value as Record<string, unknown>
++  })
++
++  const readInstalled = Effect.fn("PluginInfo.readInstalled")(function* (spec: string, cls: PluginClass) {
++    const candidates = packageJsonCandidates(spec, cls)
++    const parsed = yield* Effect.all(candidates.map(readPackageJson))
++    const index = parsed.findIndex((value) => value !== undefined)
++    const json = index === -1 ? undefined : parsed[index]
++    const pkgDir = index === -1 ? undefined : path.dirname(candidates[index])
++    const version = json !== undefined && typeof json["version"] === "string" ? json["version"] : undefined
++    const name = json !== undefined && typeof json["name"] === "string" ? json["name"] : undefined
++    const commit =
++      cls.kind === "git" && pkgDir !== undefined
++        ? yield* deps.spawner
++            .string(ChildProcess.make("git", ["-C", pkgDir, "rev-parse", "--short", "HEAD"]))
++            .pipe(
++              Effect.map((out) => out.trim()),
++              Effect.catch(() => Effect.succeed(undefined)),
++            )
++        : undefined
++    return { name, version, commit }
++  })
++
++  const fetchRemote = Effect.fn("PluginInfo.fetchRemote")(function* (cls: PluginClass) {
++    if (cls.kind === "path") return null
++    if (cls.kind === "git") {
++      const url = cls.url
++      if (url === null) return null
++      const out = yield* deps.spawner.string(ChildProcess.make("git", ["ls-remote", "--tags", url]))
++      return parseTags(out)
++    }
++    const response = yield* HttpClient.filterStatusOk(deps.http).execute(
++      HttpClientRequest.get(`https://registry.npmjs.org/${cls.name}`).pipe(HttpClientRequest.acceptJson),
++    )
++    const doc = yield* Schema.decodeUnknownEffect(Schema.UnknownFromJsonString)(yield* response.text)
++    return parseNpmRegistry(doc)
++  })
++
++  const build = Effect.fn("PluginInfo.build")(function* (spec: string, cls: PluginClass) {
++    const pair = yield* Effect.all(
++      [
++        readInstalled(spec, cls),
++        fetchRemote(cls).pipe(Effect.timeout(REMOTE_TIMEOUT), Effect.catch(() => Effect.succeed(null))),
++      ] as const,
++    )
++    const installed = pair[0]
++    const remote = pair[1]
++    const latest = remote?.latest ?? null
++    const outdated = isOutdated(installed.version, latest)
++    return {
++      spec,
++      kind: cls.kind,
++      name: installed.name ?? cls.name,
++      ...(cls.url !== null ? { url: cls.url } : {}),
++      ...(installed.version !== undefined ? { installed: installed.version } : {}),
++      ...(installed.commit !== undefined ? { commit: installed.commit } : {}),
++      ...(latest !== null ? { latest } : {}),
++      ...(outdated !== null ? { outdated } : {}),
++      versions: remote?.versions ?? [],
++    }
++  })
++
++  const one = Effect.fn("PluginInfo.one")(function* (spec: string) {
++    const cls = classify(spec)
++    const hit = cache.get(spec)
++    if (hit !== undefined && Date.now() - hit.at < TTL) return hit.item
++    if (hit !== undefined) {
++      yield* build(spec, cls).pipe(
++        Effect.tap((item) => Effect.sync(() => cache.set(spec, { at: Date.now(), item }))),
++        Effect.ignore,
++        Effect.forkIn(deps.scope),
++      )
++      return hit.item
++    }
++    const item = yield* build(spec, cls)
++    yield* Effect.sync(() => cache.set(spec, { at: Date.now(), item }))
++    return item
++  })
++
++  const list = Effect.fn("PluginInfo.list")(function* () {
++    const info = yield* deps.config.get()
++    const specs = (info.plugin ?? []).map(ConfigPlugin.pluginSpecifier)
++    return yield* Effect.all(specs.map((spec) => one(spec)), { concurrency: 8 })
++  })
++
++  const rewritePluginEntry = Effect.fn("PluginInfo.rewritePluginEntry")(function* (
++    file: string,
++    oldSpec: string,
++    newSpec: string,
++  ) {
++    const text = yield* deps.fs.readFileString(file).pipe(
++      Effect.mapError(() => new PluginUpdateError({ message: `cannot read config file: ${file}` })),
++    )
++    const next = rewritePluginSpec(text, oldSpec, newSpec)
++    if (next === undefined) return yield* new PluginUpdateError({ message: `plugin not found in config file: ${file}` })
++    yield* deps.fs.writeFileString(file, next).pipe(
++      Effect.mapError(() => new PluginUpdateError({ message: `cannot write config file: ${file}` })),
++    )
++  })
++
++  const update = Effect.fn("PluginInfo.update")(function* (
++    input: { readonly spec: string; readonly version: string },
++  ) {
++    const info = yield* deps.config.get()
++    const origin = (info.plugin_origins ?? []).find(
++      (item) => ConfigPlugin.pluginSpecifier(item.spec) === input.spec,
++    )
++    if (origin === undefined) return yield* new PluginUpdateError({ message: `plugin not found in config: ${input.spec}` })
++    const cls = classify(input.spec)
++    if (cls.kind === "path")
++      return yield* new PluginUpdateError({ message: `path plugins cannot be updated: ${input.spec}` })
++    const remote = yield* fetchRemote(cls).pipe(
++      Effect.timeout(REMOTE_TIMEOUT),
++      Effect.mapError(() => new PluginUpdateError({ message: `could not determine available versions for ${input.spec}` })),
++    )
++    if (remote === null)
++      return yield* new PluginUpdateError({ message: `could not determine available versions for ${input.spec}` })
++    if (!remote.versions.includes(input.version))
++      return yield* new PluginUpdateError({ message: `version not available for ${input.spec}: ${input.version}` })
++    const nextSpec = updateSpec(input.spec, input.version)
++    if (nextSpec !== input.spec) {
++      yield* rewritePluginEntry(origin.source, input.spec, nextSpec)
++      yield* deps.fs.remove(path.join(deps.global.cache, "packages", Npm.sanitize(cacheKey(input.spec)))).pipe(
++        Effect.catch(() => Effect.void),
++      )
++    }
++    yield* Effect.sync(() => cache.delete(input.spec))
++    yield* deps.config.invalidate()
++    return yield* build(nextSpec, classify(nextSpec))
++  })
++
++  return { list, update }
++}
++
++const layer = Layer.effect(
++  Service,
++  Effect.gen(function* () {
++    const config = yield* Config.Service
++    const global = yield* Global.Service
++    const fs = yield* FSUtil.Service
++    const spawner = yield* AppProcess.Service
++    const http = yield* HttpClient.HttpClient
++    const scope = yield* Scope.Scope
++    return makeService({ config, global, fs, spawner, http, scope })
++  }),
++)
++
++export const node = LayerNode.make({
++  service: Service,
++  layer: layer,
++  deps: [Config.node, Global.node, FSUtil.node, AppProcess.node, httpClient],
++})
++
++export * as PluginInfo from "./info"
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/api.ts b/packages/opencode/src/server/routes/instance/httpapi/api.ts
+index f5076ad08..90ae408d4 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/api.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/api.ts
+@@ -16,6 +16,7 @@ import { FileApi } from "./groups/file"
+ import { InstanceApi } from "./groups/instance"
+ import { McpApi } from "./groups/mcp"
+ import { PermissionApi } from "./groups/permission"
++import { PluginApi } from "./groups/plugin"
+ import { ProjectApi } from "./groups/project"
+ import { ProjectCopyApi } from "./groups/project-copy"
+ import { ProviderApi } from "./groups/provider"
+@@ -69,6 +70,7 @@ export const InstanceHttpApi = HttpApi.make("opencode-instance")
+   .addHttpApi(PtyApi)
+   .addHttpApi(QuestionApi)
+   .addHttpApi(PermissionApi)
++  .addHttpApi(PluginApi)
+   .addHttpApi(ProviderApi)
+   .addHttpApi(SessionApi)
+   .addHttpApi(SyncApi)
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/plugin.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/plugin.ts
+new file mode 100644
+index 000000000..d356688a2
+--- /dev/null
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/plugin.ts
+@@ -0,0 +1,62 @@
++import { Schema } from "effect"
++import { PluginInfo } from "@/plugin/info"
++import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
++import { Authorization } from "../middleware/authorization"
++import { InstanceContextMiddleware } from "../middleware/instance-context"
++import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
++import { described } from "./metadata"
++
++const root = "/plugin"
++
++export class PluginApiError extends Schema.ErrorClass<PluginApiError>("PluginError")(
++  {
++    name: Schema.Literal("PluginUpdateError"),
++    data: Schema.Struct({ message: Schema.String }),
++  },
++  { httpApiStatus: 400 },
++) {}
++
++export const PluginApi = HttpApi.make("plugin")
++  .add(
++    HttpApiGroup.make("plugin")
++      .add(
++        HttpApiEndpoint.get("get", root, {
++          query: WorkspaceRoutingQuery,
++          success: described(Schema.Array(PluginInfo.PluginInfoItem), "List of plugin versions"),
++        }).annotateMerge(
++          OpenApi.annotations({
++            identifier: "plugin.get",
++            summary: "List plugins",
++            description: "Get the installed, latest, and available versions for each configured plugin.",
++          }),
++        ),
++        HttpApiEndpoint.post("update", `${root}/update`, {
++          query: WorkspaceRoutingQuery,
++          payload: PluginInfo.UpdateInput,
++          success: described(PluginInfo.PluginInfoItem, "Updated plugin"),
++          error: PluginApiError,
++        }).annotateMerge(
++          OpenApi.annotations({
++            identifier: "plugin.update",
++            summary: "Update plugin",
++            description: "Pin a plugin to a specific version and rewrite its config entry.",
++          }),
++        ),
++      )
++      .annotateMerge(
++        OpenApi.annotations({
++          title: "plugin",
++          description: "Experimental HttpApi plugin version routes.",
++        }),
++      )
++      .middleware(InstanceContextMiddleware)
++      .middleware(WorkspaceRoutingMiddleware)
++      .middleware(Authorization),
++  )
++  .annotateMerge(
++    OpenApi.annotations({
++      title: "opencode experimental HttpApi",
++      version: "0.0.1",
++      description: "Experimental HttpApi surface for selected instance routes.",
++    }),
++  )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/plugin.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/plugin.ts
+new file mode 100644
+index 000000000..5fdb90958
+--- /dev/null
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/plugin.ts
+@@ -0,0 +1,33 @@
++import { Effect } from "effect"
++import { PluginInfo } from "@/plugin/info"
++import * as InstanceState from "@/effect/instance-state"
++import { HttpApiBuilder } from "effect/unstable/httpapi"
++import { InstanceHttpApi } from "../api"
++import { markInstanceForDisposal } from "../lifecycle"
++import { PluginApiError } from "../groups/plugin"
++
++export const pluginHandlers = HttpApiBuilder.group(InstanceHttpApi, "plugin", (handlers) =>
++  Effect.gen(function* () {
++    const pluginSvc = yield* PluginInfo.Service
++
++    const get = Effect.fn("PluginHttpApi.get")(function* () {
++      return yield* pluginSvc.list()
++    })
++
++    const update = Effect.fn("PluginHttpApi.update")(function* (ctx) {
++      const item = yield* pluginSvc.update(ctx.payload).pipe(
++        Effect.mapError(
++          (error) =>
++            new PluginApiError({
++              name: "PluginUpdateError",
++              data: { message: error.message },
++            }),
++        ),
++      )
++      yield* markInstanceForDisposal(yield* InstanceState.context)
++      return item
++    })
++
++    return handlers.handle("get", get).handle("update", update)
++  }),
++)
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/server.ts b/packages/opencode/src/server/routes/instance/httpapi/server.ts
+index fb9d2db65..b67f79c1e 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/server.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/server.ts
+@@ -21,6 +21,7 @@ import { MCP } from "@/mcp"
+ import { McpAuth } from "@/mcp/auth"
+ import { Permission } from "@/permission"
+ import { Plugin } from "@/plugin"
++import { PluginInfo } from "@/plugin/info"
+ import { PluginPtyEnvironment } from "@/plugin/pty-environment"
+ import { InstanceStore } from "@/project/instance-store"
+ import { Project } from "@/project/project"
+@@ -91,6 +92,7 @@ import { globalHandlers } from "./handlers/global"
+ import { instanceHandlers } from "./handlers/instance"
+ import { mcpHandlers } from "./handlers/mcp"
+ import { permissionHandlers } from "./handlers/permission"
++import { pluginHandlers } from "./handlers/plugin"
+ import { projectHandlers } from "./handlers/project"
+ import { projectCopyHandlers } from "./handlers/project-copy"
+ import { providerHandlers } from "./handlers/provider"
+@@ -163,6 +165,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
+     ptyHandlers,
+     questionHandlers,
+     permissionHandlers,
++    pluginHandlers,
+     providerHandlers,
+     sessionHandlers,
+     syncHandlers,
+@@ -222,6 +225,7 @@ const app = LayerNode.group([
+   Storage.node,
+   Snapshot.node,
+   Plugin.node,
++  PluginInfo.node,
+   ModelsDev.node,
+   Provider.node,
+   ProviderAuth.node,
+diff --git a/packages/opencode/test/plugin/info.test.ts b/packages/opencode/test/plugin/info.test.ts
+new file mode 100644
+index 000000000..fa9da5860
+--- /dev/null
++++ b/packages/opencode/test/plugin/info.test.ts
+@@ -0,0 +1,484 @@
++import { describe, expect, test } from "bun:test"
++import fs from "fs/promises"
++import path from "path"
++import { Effect, Scope } from "effect"
++import { HttpClient, HttpClientResponse } from "effect/unstable/http"
++import { tmpdir } from "../fixture/fixture"
++import {
++  classify,
++  updateSpec,
++  parseTags,
++  parseNpmRegistry,
++  isOutdated,
++  rewritePluginSpec,
++  makeService,
++  type Deps,
++} from "../../src/plugin/info"
++import { Config } from "../../src/config/config"
++import { Global } from "@opencode-ai/core/global"
++import { FSUtil } from "@opencode-ai/core/fs-util"
++import { AppProcess } from "@opencode-ai/core/process"
++
++describe("classify", () => {
++  test("bare npm package", () => {
++    expect(classify("acme")).toEqual({
++      kind: "npm",
++      name: "acme",
++      url: "https://www.npmjs.com/package/acme",
++      committish: null,
++    })
++  })
++
++  test("npm package with version", () => {
++    expect(classify("acme@1.0.0")).toEqual({
++      kind: "npm",
++      name: "acme",
++      url: "https://www.npmjs.com/package/acme",
++      committish: null,
++    })
++  })
++
++  test("scoped npm package", () => {
++    expect(classify("@opencode/acme@1.0.0").name).toBe("@opencode/acme")
++    expect(classify("@opencode/acme@1.0.0").url).toBe("https://www.npmjs.com/package/@opencode/acme")
++  })
++
++  test("git https url", () => {
++    expect(classify("git+https://github.com/user/repo")).toEqual({
++      kind: "git",
++      name: "repo",
++      url: "https://github.com/user/repo",
++      committish: null,
++    })
++  })
++
++  test("git https url with committish", () => {
++    expect(classify("git+https://github.com/user/repo#v1.0.0")).toEqual({
++      kind: "git",
++      name: "repo",
++      url: "https://github.com/user/repo",
++      committish: "v1.0.0",
++    })
++  })
++
++  test("git ssh url with committish", () => {
++    expect(classify("git+ssh://git@github.com/user/repo.git#main")).toEqual({
++      kind: "git",
++      name: "repo",
++      url: "ssh://git@github.com/user/repo",
++      committish: "main",
++    })
++  })
++
++  test("hosted git shorthand", () => {
++    expect(classify("user/repo")).toEqual({
++      kind: "git",
++      name: "repo",
++      url: "https://github.com/user/repo",
++      committish: null,
++    })
++  })
++
++  test("scoped npm name wins over git url", () => {
++    expect(classify("@scope/a@git+https://github.com/u/r.git").name).toBe("@scope/a")
++  })
++
++  test("relative path", () => {
++    const cls = classify("./local")
++    expect(cls.kind).toBe("path")
++    expect(cls.name).toBe("local")
++    expect(cls.url).toBeNull()
++  })
++
++  test("file url path", () => {
++    const cls = classify("file:///tmp/x")
++    expect(cls.kind).toBe("path")
++    expect(cls.name).toBe("x")
++  })
++})
++
++describe("updateSpec", () => {
++  test("npm package gets versioned", () => {
++    expect(updateSpec("acme", "1.2.3")).toBe("acme@1.2.3")
++  })
++
++  test("npm package replaces existing version", () => {
++    expect(updateSpec("acme@1.0.0", "2.0.0")).toBe("acme@2.0.0")
++  })
++
++  test("scoped npm package", () => {
++    expect(updateSpec("@opencode/acme@1.0.0", "2.0.0")).toBe("@opencode/acme@2.0.0")
++  })
++
++  test("git url gains committish", () => {
++    expect(updateSpec("git+https://github.com/user/repo", "v2.0.0")).toBe(
++      "git+https://github.com/user/repo#v2.0.0",
++    )
++  })
++
++  test("git url replaces existing committish", () => {
++    expect(updateSpec("git+https://github.com/user/repo#v1.0.0", "v2.0.0")).toBe(
++      "git+https://github.com/user/repo#v2.0.0",
++    )
++  })
++
++  test("path spec is unchanged", () => {
++    expect(updateSpec("./local", "2.0.0")).toBe("./local")
++  })
++})
++
++describe("parseTags", () => {
++  test("picks newest stable and lists top versions desc", () => {
++    const out = [
++      "aaa\trefs/tags/v1.0.0",
++      "bbb\trefs/tags/v1.2.0",
++      "ccc\trefs/tags/v1.2.0^{}",
++      "ddd\trefs/tags/v1.1.0",
++      "eee\trefs/tags/v2.0.0-rc.1",
++    ].join("\n")
++    expect(parseTags(out)).toEqual({
++      latest: "1.2.0",
++      versions: ["v2.0.0-rc.1", "v1.2.0", "v1.1.0", "v1.0.0"],
++    })
++  })
++
++  test("ignores non-semver tags and non-tag refs", () => {
++    const out = ["aaa\trefs/tags/notes", "bbb\trefs/heads/main", "ccc\trefs/tags/v1.0.0"].join("\n")
++    expect(parseTags(out)).toEqual({ latest: "1.0.0", versions: ["v1.0.0"] })
++  })
++
++  test("falls back to newest when only prereleases exist", () => {
++    const out = ["aaa\trefs/tags/v1.0.0-beta.1", "bbb\trefs/tags/v1.0.0-beta.2"].join("\n")
++    expect(parseTags(out)).toEqual({ latest: "1.0.0-beta.2", versions: ["v1.0.0-beta.2", "v1.0.0-beta.1"] })
++  })
++
++  test("returns null when nothing parses", () => {
++    expect(parseTags("")).toBeNull()
++    expect(parseTags("aaa\trefs/tags/notes")).toBeNull()
++  })
++})
++
++describe("parseNpmRegistry", () => {
++  test("uses dist-tags.latest and lists versions desc", () => {
++    expect(
++      parseNpmRegistry({
++        "dist-tags": { latest: "2.0.0" },
++        versions: { "1.0.0": {}, "2.0.0": {}, "2.1.0": {} },
++      }),
++    ).toEqual({ latest: "2.0.0", versions: ["2.1.0", "2.0.0", "1.0.0"] })
++  })
++
++  test("falls back to newest stable when dist-tags missing", () => {
++    expect(parseNpmRegistry({ versions: { "1.0.0": {}, "2.0.0": {}, "2.1.0-beta.1": {} } })).toEqual({
++      latest: "2.0.0",
++      versions: ["2.1.0-beta.1", "2.0.0", "1.0.0"],
++    })
++  })
++
++  test("returns null for non-object or missing versions", () => {
++    expect(parseNpmRegistry(null)).toBeNull()
++    expect(parseNpmRegistry("nope")).toBeNull()
++    expect(parseNpmRegistry({ "dist-tags": { latest: "1.0.0" } })).toBeNull()
++    expect(parseNpmRegistry({ versions: {} })).toBeNull()
++  })
++})
++
++describe("isOutdated", () => {
++  test("true when installed < latest", () => {
++    expect(isOutdated("1.0.0", "2.0.0")).toBe(true)
++  })
++
++  test("false when installed >= latest", () => {
++    expect(isOutdated("2.0.0", "2.0.0")).toBe(false)
++    expect(isOutdated("3.0.0", "2.0.0")).toBe(false)
++  })
++
++  test("null when either side is missing or unparseable", () => {
++    expect(isOutdated(null, "2.0.0")).toBeNull()
++    expect(isOutdated("1.0.0", null)).toBeNull()
++    expect(isOutdated(undefined, "2.0.0")).toBeNull()
++    expect(isOutdated("not-a-version", "2.0.0")).toBeNull()
++  })
++})
++
++describe("rewritePluginSpec", () => {
++  test("replaces a bare entry, preserving the rest", () => {
++    const next = rewritePluginSpec('{ "plugin": ["acme", "other@1.0.0"] }', "acme", "acme@1.2.3")
++    expect(next).toBeDefined()
++    expect(JSON.parse(next!)).toEqual({ plugin: ["acme@1.2.3", "other@1.0.0"] })
++  })
++
++  test("replaces only the specifier of an entry with options", () => {
++    const next = rewritePluginSpec(
++      '{ "plugin": [["acme", { "enabled": true }]] }',
++      "acme",
++      "acme@1.2.3",
++    )
++    expect(next).toBeDefined()
++    expect(JSON.parse(next!)).toEqual({ plugin: [["acme@1.2.3", { enabled: true }]] })
++  })
++
++  test("returns undefined when the plugin is not present", () => {
++    expect(rewritePluginSpec('{ "plugin": ["other@1.0.0"] }', "acme", "acme@1.2.3")).toBeUndefined()
++  })
++
++  test("returns undefined when there is no plugin array", () => {
++    expect(rewritePluginSpec('{ "model": "acme" }', "acme", "acme@1.2.3")).toBeUndefined()
++  })
++})
++
++const json = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unknown, status = 200) =>
++  HttpClientResponse.fromWeb(request, new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }))
++
++type Counters = {
++  gitLsRemote: number
++  gitRevParse: number
++  http: number
++  invalidate: number
++}
++
++function makeDeps(input: {
++  dir: string
++  config: { plugin: unknown[]; plugin_origins?: { spec: unknown; source: string }[] }
++  gitTags?: string
++  gitHead?: string
++  npm?: unknown
++  gitFail?: boolean
++  httpFail?: boolean
++}): { deps: Deps; counters: Counters } {
++  const counters: Counters = { gitLsRemote: 0, gitRevParse: 0, http: 0, invalidate: 0 }
++  const fsFake = {
++    readFileStringSafe: (file: string) =>
++      Effect.tryPromise({
++        try: async () => {
++          try {
++            return await fs.readFile(file, "utf8")
++          } catch {
++            return undefined
++          }
++        },
++        catch: (e) => e as Error,
++      }),
++    readFileString: (file: string) =>
++      Effect.tryPromise({
++        try: () => fs.readFile(file, "utf8"),
++        catch: (e) => e as Error,
++      }),
++    writeFileString: (file: string, data: string) =>
++      Effect.tryPromise({
++        try: async () => {
++          await fs.mkdir(path.dirname(file), { recursive: true })
++          await fs.writeFile(file, data, "utf8")
++        },
++        catch: (e) => e as Error,
++      }),
++    remove: (file: string) =>
++      Effect.tryPromise({
++        try: async () => {
++          await fs.rm(file, { recursive: true, force: true })
++        },
++        catch: (e) => e as Error,
++      }),
++  }
++  const spawnerFake = {
++    string: (cmd: { command: string; args: readonly string[] }) => {
++      if (cmd.command === "git" && cmd.args.includes("ls-remote")) {
++        counters.gitLsRemote++
++        if (input.gitFail) return Effect.fail(new Error("git ls-remote failed"))
++        return Effect.succeed(input.gitTags ?? "")
++      }
++      if (cmd.command === "git" && cmd.args.includes("rev-parse")) {
++        counters.gitRevParse++
++        if (input.gitHead === undefined) return Effect.fail(new Error("not a git repository"))
++        return Effect.succeed(input.gitHead)
++      }
++      return Effect.fail(new Error(`unexpected command: ${cmd.command} ${cmd.args.join(" ")}`))
++    },
++  }
++  const httpFake = HttpClient.make((request) => {
++    counters.http++
++    if (input.httpFail) return Effect.succeed(json(request, {}, 500))
++    return Effect.succeed(json(request, input.npm ?? {}))
++  })
++  const configFake = {
++    get: () => Effect.succeed(input.config),
++    invalidate: () => {
++      counters.invalidate++
++      return Effect.void
++    },
++  }
++  const globalFake = { cache: input.dir }
++  const deps: Deps = {
++    config: configFake as unknown as Config.Interface,
++    global: globalFake as unknown as Global.Interface,
++    fs: fsFake as unknown as FSUtil.Interface,
++    spawner: spawnerFake as unknown as AppProcess.Interface,
++    http: httpFake,
++    scope: Scope.makeUnsafe(),
++  }
++  return { deps, counters }
++}
++
++describe("makeService.list", () => {
++  test("returns installed, latest, outdated and versions for an npm plugin", async () => {
++    await using tmp = await tmpdir()
++    const cfgFile = path.join(tmp.path, "config.json")
++    const pkgFile = path.join(tmp.path, "packages", "acme@1.0.0", "node_modules", "acme", "package.json")
++    await fs.mkdir(path.dirname(pkgFile), { recursive: true })
++    await fs.writeFile(pkgFile, JSON.stringify({ name: "acme", version: "1.0.0" }))
++    const { deps, counters } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: cfgFile }] },
++      npm: { "dist-tags": { latest: "2.0.0" }, versions: { "1.0.0": {}, "2.0.0": {}, "2.1.0": {} } },
++    })
++    const items = await Effect.runPromise(makeService(deps).list())
++    expect(items).toEqual([
++      {
++        spec: "acme@1.0.0",
++        kind: "npm",
++        name: "acme",
++        url: "https://www.npmjs.com/package/acme",
++        installed: "1.0.0",
++        latest: "2.0.0",
++        outdated: true,
++        versions: ["2.1.0", "2.0.0", "1.0.0"],
++      },
++    ])
++    expect(counters.http).toBe(1)
++  })
++
++  test("finds a bare npm name under its name@latest cache key", async () => {
++    await using tmp = await tmpdir()
++    const pkgFile = path.join(tmp.path, "packages", "acme@latest", "node_modules", "acme", "package.json")
++    await fs.mkdir(path.dirname(pkgFile), { recursive: true })
++    await fs.writeFile(pkgFile, JSON.stringify({ name: "acme", version: "1.0.0" }))
++    const { deps } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme"], plugin_origins: [{ spec: "acme", source: "/c" }] },
++      npm: { "dist-tags": { latest: "1.0.0" }, versions: { "1.0.0": {} } },
++    })
++    const items = await Effect.runPromise(makeService(deps).list())
++    expect(items[0]).toMatchObject({ spec: "acme", installed: "1.0.0", latest: "1.0.0", outdated: false })
++  })
++
++  test("caches results within the ttl", async () => {
++    await using tmp = await tmpdir()
++    const { deps, counters } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: "/c" }] },
++      npm: { "dist-tags": { latest: "2.0.0" }, versions: { "1.0.0": {}, "2.0.0": {} } },
++    })
++    const svc = makeService(deps)
++    await Effect.runPromise(svc.list())
++    await Effect.runPromise(svc.list())
++    expect(counters.http).toBe(1)
++  })
++
++  test("reads the installed git commit via rev-parse", async () => {
++    await using tmp = await tmpdir()
++    const pkgFile = path.join(
++      tmp.path,
++      "packages",
++      "acme@git+https://github.com/user/repo",
++      "node_modules",
++      "acme",
++      "package.json",
++    )
++    await fs.mkdir(path.dirname(pkgFile), { recursive: true })
++    await fs.writeFile(pkgFile, JSON.stringify({ name: "acme", version: "1.0.0" }))
++    const spec = "acme@git+https://github.com/user/repo"
++    const { deps, counters } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: [spec], plugin_origins: [{ spec, source: "/c" }] },
++      gitTags: "aaa\trefs/tags/v1.0.0\nbbb\trefs/tags/v1.1.0",
++      gitHead: "deadbee",
++    })
++    const items = await Effect.runPromise(makeService(deps).list())
++    expect(counters.gitLsRemote).toBe(1)
++    expect(counters.gitRevParse).toBe(1)
++    expect(items[0]).toMatchObject({ spec, kind: "git", installed: "1.0.0", commit: "deadbee", latest: "1.1.0" })
++  })
++
++  test("remote failure leaves the entry without latest or outdated", async () => {
++    await using tmp = await tmpdir()
++    const cfgFile = path.join(tmp.path, "config.json")
++    const pkgFile = path.join(tmp.path, "packages", "acme@1.0.0", "node_modules", "acme", "package.json")
++    await fs.mkdir(path.dirname(pkgFile), { recursive: true })
++    await fs.writeFile(pkgFile, JSON.stringify({ name: "acme", version: "1.0.0" }))
++    const { deps } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: cfgFile }] },
++      httpFail: true,
++    })
++    const items = await Effect.runPromise(makeService(deps).list())
++    expect(items).toEqual([
++      { spec: "acme@1.0.0", kind: "npm", name: "acme", url: "https://www.npmjs.com/package/acme", installed: "1.0.0", versions: [] },
++    ])
++  })
++})
++
++describe("makeService.update", () => {
++  test("rewrites the config entry, clears the cache and invalidates", async () => {
++    await using tmp = await tmpdir()
++    const cfgFile = path.join(tmp.path, "config.json")
++    const oldCache = path.join(tmp.path, "packages", "acme@1.0.0")
++    await fs.mkdir(oldCache, { recursive: true })
++    await fs.writeFile(cfgFile, JSON.stringify({ plugin: ["acme@1.0.0"] }))
++    const { deps, counters } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: cfgFile }] },
++      npm: { "dist-tags": { latest: "2.0.0" }, versions: { "1.0.0": {}, "2.0.0": {} } },
++    })
++    const item = await Effect.runPromise(makeService(deps).update({ spec: "acme@1.0.0", version: "2.0.0" }))
++    expect(JSON.parse(await fs.readFile(cfgFile, "utf8"))).toEqual({ plugin: ["acme@2.0.0"] })
++    let cacheGone = false
++    try {
++      await fs.stat(oldCache)
++    } catch {
++      cacheGone = true
++    }
++    expect(cacheGone).toBe(true)
++    expect(counters.invalidate).toBe(1)
++    expect(item.spec).toBe("acme@2.0.0")
++    expect(item.latest).toBe("2.0.0")
++  })
++
++  test("rejects a version that is not available", async () => {
++    await using tmp = await tmpdir()
++    const cfgFile = path.join(tmp.path, "config.json")
++    await fs.writeFile(cfgFile, JSON.stringify({ plugin: ["acme@1.0.0"] }))
++    const { deps } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: cfgFile }] },
++      npm: { "dist-tags": { latest: "2.0.0" }, versions: { "1.0.0": {}, "2.0.0": {} } },
++    })
++    await expect(
++      Effect.runPromise(makeService(deps).update({ spec: "acme@1.0.0", version: "9.9.9" })),
++    ).rejects.toMatchObject({ _tag: "PluginUpdateError" })
++  })
++
++  test("rejects path plugins", async () => {
++    await using tmp = await tmpdir()
++    const cfgFile = path.join(tmp.path, "config.json")
++    await fs.writeFile(cfgFile, JSON.stringify({ plugin: ["./local"] }))
++    const { deps } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["./local"], plugin_origins: [{ spec: "./local", source: cfgFile }] },
++    })
++    await expect(
++      Effect.runPromise(makeService(deps).update({ spec: "./local", version: "2.0.0" })),
++    ).rejects.toMatchObject({ _tag: "PluginUpdateError" })
++  })
++
++  test("rejects a spec that is not in the config", async () => {
++    await using tmp = await tmpdir()
++    const { deps } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: [], plugin_origins: [] },
++      npm: { versions: { "1.0.0": {} } },
++    })
++    await expect(
++      Effect.runPromise(makeService(deps).update({ spec: "acme@1.0.0", version: "1.0.0" })),
++    ).rejects.toMatchObject({ _tag: "PluginUpdateError" })
++  })
++})
+diff --git a/packages/sdk/js/src/v2/gen/sdk.gen.ts b/packages/sdk/js/src/v2/gen/sdk.gen.ts
+index 19d7632bf..416a75aa0 100644
+--- a/packages/sdk/js/src/v2/gen/sdk.gen.ts
++++ b/packages/sdk/js/src/v2/gen/sdk.gen.ts
+@@ -130,6 +130,10 @@ import type {
+   PermissionRuleset,
+   PermissionV2Reply,
+   PermissionV2Source,
++  PluginGetErrors,
++  PluginGetResponses,
++  PluginUpdateErrors,
++  PluginUpdateResponses,
+   ProjectCommands,
+   ProjectCurrentErrors,
+   ProjectCurrentResponses,
+@@ -3216,6 +3220,77 @@ export class Permission extends HeyApiClient {
+   }
+ }
+ 
++export class Plugin extends HeyApiClient {
++  /**
++   * List plugins
++   *
++   * Get the installed, latest, and available versions for each configured plugin.
++   */
++  public get<ThrowOnError extends boolean = false>(
++    parameters?: {
++      directory?: string
++      workspace?: string
++    },
++    options?: Options<never, ThrowOnError>,
++  ) {
++    const params = buildClientParams(
++      [parameters],
++      [
++        {
++          args: [
++            { in: "query", key: "directory" },
++            { in: "query", key: "workspace" },
++          ],
++        },
++      ],
++    )
++    return (options?.client ?? this.client).get<PluginGetResponses, PluginGetErrors, ThrowOnError>({
++      url: "/plugin",
++      ...options,
++      ...params,
++    })
++  }
++
++  /**
++   * Update plugin
++   *
++   * Pin a plugin to a specific version and rewrite its config entry.
++   */
++  public update<ThrowOnError extends boolean = false>(
++    parameters?: {
++      directory?: string
++      workspace?: string
++      spec?: string
++      version?: string
++    },
++    options?: Options<never, ThrowOnError>,
++  ) {
++    const params = buildClientParams(
++      [parameters],
++      [
++        {
++          args: [
++            { in: "query", key: "directory" },
++            { in: "query", key: "workspace" },
++            { in: "body", key: "spec" },
++            { in: "body", key: "version" },
++          ],
++        },
++      ],
++    )
++    return (options?.client ?? this.client).post<PluginUpdateResponses, PluginUpdateErrors, ThrowOnError>({
++      url: "/plugin/update",
++      ...options,
++      ...params,
++      headers: {
++        "Content-Type": "application/json",
++        ...options?.headers,
++        ...params.headers,
++      },
++    })
++  }
++}
++
+ export class Oauth extends HeyApiClient {
+   /**
+    * Start OAuth authorization
+@@ -7460,6 +7535,11 @@ export class OpencodeClient extends HeyApiClient {
+     return (this._permission ??= new Permission({ client: this.client }))
+   }
+ 
++  private _plugin?: Plugin
++  get plugin(): Plugin {
++    return (this._plugin ??= new Plugin({ client: this.client }))
++  }
++
+   private _provider?: Provider
+   get provider(): Provider {
+     return (this._provider ??= new Provider({ client: this.client }))
+diff --git a/packages/sdk/js/src/v2/gen/types.gen.ts b/packages/sdk/js/src/v2/gen/types.gen.ts
+index 8b8f88a11..0070cc500 100644
+--- a/packages/sdk/js/src/v2/gen/types.gen.ts
++++ b/packages/sdk/js/src/v2/gen/types.gen.ts
+@@ -9299,6 +9299,92 @@ export type PermissionReplyResponses = {
+ 
+ export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionReplyResponses]
+ 
++export type PluginError = {
++  name: "PluginUpdateError"
++  data: {
++    message: string
++  }
++}
++
++export type PluginGetData = {
++  body?: never
++  path?: never
++  query?: {
++    directory?: string
++    workspace?: string
++  }
++  url: "/plugin"
++}
++
++export type PluginGetErrors = {
++  /**
++   * Bad request
++   */
++  400: BadRequestError
++}
++
++export type PluginGetError = PluginGetErrors[keyof PluginGetErrors]
++
++export type PluginGetResponses = {
++  /**
++   * List of plugin versions
++   */
++  200: Array<{
++    spec: string
++    kind: "git" | "npm" | "path"
++    name: string
++    url?: string
++    installed?: string
++    commit?: string
++    latest?: string
++    outdated?: boolean
++    versions: Array<string>
++  }>
++}
++
++export type PluginGetResponse = PluginGetResponses[keyof PluginGetResponses]
++
++export type PluginUpdateData = {
++  body?: {
++    spec: string
++    version: string
++  }
++  path?: never
++  query?: {
++    directory?: string
++    workspace?: string
++  }
++  url: "/plugin/update"
++}
++
++export type PluginUpdateErrors = {
++  /**
++   * PluginError | InvalidRequestError
++   */
++  400: PluginError | InvalidRequestError
++}
++
++export type PluginUpdateError = PluginUpdateErrors[keyof PluginUpdateErrors]
++
++export type PluginUpdateResponses = {
++  /**
++   * Updated plugin
++   */
++  200: {
++    spec: string
++    kind: "git" | "npm" | "path"
++    name: string
++    url?: string
++    installed?: string
++    commit?: string
++    latest?: string
++    outdated?: boolean
++    versions: Array<string>
++  }
++}
++
++export type PluginUpdateResponse = PluginUpdateResponses[keyof PluginUpdateResponses]
++
+ export type ProviderListData = {
+   body?: never
+   path?: never

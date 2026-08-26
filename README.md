@@ -6,7 +6,7 @@ onto upstream release tags. The stack is aligned with the
 patches adopted from there are rebased onto each new release here, plus
 locally-authored patches.
 
-Currently tracking **v1.18.21** (rebased 2026-08-23; 27 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
+Currently tracking **v1.18.21** (rebased 2026-08-23; 29 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
 
 ## Patch stack
 
@@ -45,6 +45,7 @@ is a summary.
 | 26 | `vcs-untracked-normal.patch` | local | respect `.gitignore`, prevent VCS crash on large repos (parent does not carry; kept as local safety) |
 | 27 | `revert-orphan-parents.patch` | local | reparent orphaned messages after `/undo` revert cleanup (upstream #38864; parent does not carry; kept) |
 | 28 | `status-popover-widen.patch` | local | widen status popover 360px → 600px so plugin/MCP identifiers aren't truncated to their URL/path prefix |
+| 29 | `plugin-outdated-indicator.patch` | local | plugin version/outdated indicator: `GET /plugin` route + `isOutdated` (semver vs latest stable) + status-popover plugin tab (targeted v2 SDK additions, not full regen) |
 
 Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3.
 
