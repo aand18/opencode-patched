@@ -1,0 +1,26 @@
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts
+index 1f7467d32bc1671e16449f4506b7ea7aa43e09aa..a83eaf9bbc70a5bcdad0a6d1490ace9eede89ac7 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts
+@@ -89,7 +89,7 @@
+       Stream.merge(disposed, { haltStrategy: "left" }),
+       Stream.takeUntil((event) => event.type === "server.instance.disposed"),
+     )
+-    const heartbeat = Stream.tick("10 seconds").pipe(
++    const heartbeat = Stream.tick("4 seconds").pipe(
+       Stream.drop(1),
+       Stream.map(() => ({ id: eventID(), type: "server.heartbeat", properties: {} })),
+     )
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts
+index c1f588d5a146e66c85f560da20c030873dde2c7e..22f9d967ea405ff163ffd70a10adb8908e8f5336 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts
+@@ -40,7 +40,7 @@
+         () => Effect.sync(() => GlobalBus.off("event", handler)),
+       )
+     })
+-    const heartbeat = Stream.tick("10 seconds").pipe(
++    const heartbeat = Stream.tick("4 seconds").pipe(
+       Stream.drop(1),
+       Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
+     )

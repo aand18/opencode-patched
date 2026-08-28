@@ -8,7 +8,7 @@
 # rolled forward v1.18.3 -> v1.18.15 on 2026-08-09 -> v1.18.21 on 2026-08-23,
 # then aligned 2026-08-23 to johnnymo87/opencode-patched upstream/main @ 853da6382
 # (v1.18.18, 27 active) — adopt parent's new patches, drop divergences except
-# user-requested exclusions):
+# user-requested exclusions; + sse-heartbeat-4s added 2026-08-27 (30 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -62,6 +62,10 @@
 #       and a status-popover plugin tab. SDK is a TARGETED v2 addition (Plugin class + 12 Plugin* types incl.
 #       PluginError, getter, 4 imports), NOT a full regen -- full regen restructures Session2 and drops #19's
 #       mcpStatus/mcpConnect additions -> TUI typecheck errors. order-independent
+#   30. sse-heartbeat-4s.patch     (local)     - lower SSE heartbeat tick 10s -> 4s (prevents WSL2 NAT
+#       idle-kill of idle SSE streams); shared file handlers/event.ts with event-session-scope (#4) and
+#       event-cold-start-directory (#5), disjoint hunks (heartbeat line sits below both patches' regions)
+#       -> MUST apply after #5
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -78,7 +82,7 @@
 #   - eager-input-streaming.patch: upstream-merged (PRs #23223, #24573, #24642)
 #   - prefill-fix.patch: upstream-merged (commit 69910f361, PR #29640)
 #   - caching.patch: dropped by upstream (opencode-cached PR #5422)
-#   Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3.
+#   Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5.
 
 set -euo pipefail
 
@@ -121,6 +125,7 @@ PATCH_NAMES=(
   revert-orphan-parents
   status-popover-widen
   plugin-outdated-indicator
+  sse-heartbeat-4s
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then
