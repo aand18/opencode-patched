@@ -9,7 +9,8 @@
 # then aligned 2026-08-23 to johnnymo87/opencode-patched upstream/main @ 853da6382
 # (v1.18.18, 27 active) — adopt parent's new patches, drop divergences except
 # user-requested exclusions; + sse-heartbeat-4s added 2026-08-27,
-# + ui-asset-compression-cache added 2026-08-28 (31 total)):
+# + ui-asset-compression-cache added 2026-08-28,
+# + popover-nested-overlay added 2026-08-29 (32 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -98,6 +99,20 @@
 #       gzips per request (no dist changes, no prebuilt .gz). Context: docs/plans/2026-08-28-wsl2-nat-
 #       burst-stagger-proxy.md "Complementary server-side" section.
 #       Order-independent (touches only shared/ui.ts; no other patch modifies it)
+#   32. popover-nested-overlay.patch (local) - popover dismiss: focus/pointer inside a portaled
+#       overlay opened from within the popover (e.g. the plugin version dropdown) no longer closes
+#       the popover. The app-level window-capture focusin/pointerdown listeners in popover.tsx
+#       (upstream d97cd56867 "fix(ui): popover exit ux") check inside() against only the popover
+#       content/trigger; Kobalte dropdown-menu content is portaled to <body> (Solid Portal
+#       wrapper), so focus moving into the menu read as "outside" and unmounted popover + menu
+#       (repro: click a plugin version chevron -> popover vanished). inside() now also accepts a
+#       target whose <body>-rooted ancestor is another <body>-top-level subtree than the trigger's
+#       (i.e. any portaled overlay, which matches Kobalte's own topLayer exclusion for toasts).
+#       Click-outside/tab-out/Escape unchanged: those targets live in the app tree (#root) or
+#       body itself, not a separate <body> child. Verified live 2026-08-29: pre-fix synthetic
+#       chevron click trace = focusin on [data-component=dropdown-menu-content] (outside popover)
+#       -> popover closed; post-fix build the popover stays open and the menu renders.
+#       Order-independent (no other patch touches popover.tsx)
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -159,6 +174,7 @@ PATCH_NAMES=(
   plugin-outdated-indicator
   sse-heartbeat-4s
   ui-asset-compression-cache
+  popover-nested-overlay
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then

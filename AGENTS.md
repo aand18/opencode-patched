@@ -29,7 +29,7 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 Roll forward to a new upstream release:
 1. Fetch new tag into opencode-src (detached HEAD at tag; create local tag from FETCH_HEAD)
 2. Run `bun install` (v1.18.15+ vendors `@opencode-ai/client` tarball)
-3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (28/28 at v1.18.21)
+3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (32/32 at v1.18.21)
 4. Build, install binary (versioned name + `.bak.{TIMESTAMP}` DB backup)
 5. Update version pins: `AGENTS.md`, `README.md`, `apply.sh` header
 6. Commit in patches repo only (never commit in opencode-src)

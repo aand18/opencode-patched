@@ -1,0 +1,33 @@
+diff --git a/packages/ui/src/components/popover.tsx b/packages/ui/src/components/popover.tsx
+index be5b785191..6d2844bf13 100644
+--- a/packages/ui/src/components/popover.tsx
++++ b/packages/ui/src/components/popover.tsx
+@@ -61,13 +61,27 @@ export function Popover<T extends ValidComponent = "div">(props: PopoverProps<T>
+   createEffect(() => {
+     if (!opened()) return
+ 
++    const bodyRoot = (node: Node): Element | null => {
++      const start = node instanceof Element ? node : node.parentElement
++      if (!start) return null
++      let root = start
++      while (root.parentElement && root.parentElement !== document.body) root = root.parentElement
++      return root.parentElement === document.body ? root : null
++    }
++
+     const inside = (node: Node | null | undefined) => {
+       if (!node) return false
+       const content = state.contentRef
+       if (content && content.contains(node)) return true
+       const trigger = state.triggerRef
+       if (trigger && trigger.contains(node)) return true
+-      return false
++      // Overlays opened from within this popover (e.g. the plugin version
++      // menu) are portaled to <body>, so they are not DOM descendants of the
++      // content or trigger; interactions inside them must not dismiss it.
++      if (!trigger) return false
++      const target = bodyRoot(node)
++      const root = bodyRoot(trigger)
++      return !!target && !!root && target !== root
+     }
+ 
+     const close = (reason: "escape" | "outside") => {

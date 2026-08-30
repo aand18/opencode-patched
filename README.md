@@ -6,7 +6,7 @@ onto upstream release tags. The stack is aligned with the
 patches adopted from there are rebased onto each new release here, plus
 locally-authored patches.
 
-Currently tracking **v1.18.21** (rebased 2026-08-23; 31 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
+Currently tracking **v1.18.21** (rebased 2026-08-23; 32 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
 
 ## Patch stack
 
@@ -48,6 +48,7 @@ is a summary.
 | 29 | `plugin-outdated-indicator.patch` | local | plugin version/outdated indicator: `GET /plugin` route + `isOutdated` (semver vs latest stable) + status-popover plugin tab (targeted v2 SDK additions, not full regen) |
 | 30 | `sse-heartbeat-4s.patch` | local | lower SSE heartbeat tick 10s → 4s (prevents WSL2 NAT idle-kill of idle SSE streams) (apply after #5) |
 | 31 | `ui-asset-compression-cache.patch` | local | embedded UI assets: gzip-eligible body (2,741,090 B → 814,864 B gz) + cache-control (hashed `assets/*` immutable, stable names no-cache) |
+| 32 | `popover-nested-overlay.patch` | local | popover dismiss: focus/pointer inside a portaled overlay opened from within the popover (e.g. plugin version menu) no longer closes the popover |
 
 Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5.
 
@@ -136,6 +137,7 @@ because they modify disjoint regions):
 | revert-orphan-parents | `session/revert.ts` |
 | status-popover-widen | `app/src/components/status-popover.tsx`, `app/src/components/status-popover-body.tsx` |
 | sse-heartbeat-4s | `httpapi/handlers/{global,event}.ts` (event.ts: same file as event-session-scope / event-cold-start-directory, disjoint region) |
+| popover-nested-overlay | `ui/src/components/popover.tsx` |
 
 ## Dropped patches
 
@@ -187,7 +189,7 @@ OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod \
 1. Fetch the new tag into `opencode-src`; verify with `git apply --check` on a clean checkout.
 2. Run `bun install` before the first build (newer builds vendor `@opencode-ai/client`).
 3. `./patches/apply.sh` — any failure means the corresponding patch needs a rebase.
-   Rebase, then verify a fresh clone applies 27/27 and builds.
+    Rebase, then verify a fresh clone applies 32/32 and builds.
 4. Install the binary with a versioned name and back up `~/.local/share/opencode/opencode.db`.
 5. Update the version pins in `AGENTS.md`, this README, and the `apply.sh` header.
 6. Commit and push.
