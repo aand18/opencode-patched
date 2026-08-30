@@ -182,6 +182,22 @@ OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod \
 # binary lands at opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode
 ```
 
+### Run from source (no build)
+
+To test changes/patches without a full binary build, run the patched source
+directly. `dev-serve.sh` (repo root) wraps the exact command with the right flags
+and env:
+
+```bash
+./dev-serve.sh   # = bun --conditions=browser --define 'OPENCODE_VERSION="1.18.21"' --define 'OPENCODE_CHANNEL="prod"' opencode-src/packages/opencode/src/index.ts serve --hostname 0.0.0.0 --port 4096 --mdns
+```
+
+Edit a file → `Ctrl-C` → rerun; no build step. The Web UI is proxied from
+`app.opencode.ai` in source mode (the embedded `opencode-web-ui.gen.ts` only
+resolves at build time); run `bun run dev:web` (Vite) separately if you need the
+patched UI. See `AGENTS.md` for the full flag list and the
+`DEV_SERVE_HOST` / `DEV_SERVE_PORT` / `DEV_SERVE_MDNS` / `OPENCODE_DB` overrides.
+
 ## Maintenance
 
 ### Roll forward to a new upstream release

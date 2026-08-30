@@ -18,6 +18,13 @@
 1. Copy binary to `~/.opencode/bin/` with versioned name: `cp opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode ~/.opencode/bin/opencode-v{VERSION}-patched-{CHANNEL}-{TIMESTAMP}` (e.g., `opencode-v1.18.3-patched-prod-202607251625`). `{CHANNEL}` matches `OPENCODE_CHANNEL` env var (e.g., `prod`). Get timestamp from `--version` output.
 2. Backup database with sqlite online backup API (plain `cp` MISSES the WAL tail — verified 2026-08-09: cp-backed .bak was 50 messages/12 min stale while live db is in WAL mode): `sqlite3 ~/.local/share/opencode/opencode.db ".backup $HOME/.local/share/opencode/opencode.db.bak.{TIMESTAMP}"` (note: sqlite3 does NOT expand `~` in the .backup target; use `$HOME` or absolute path)
 
+**Dev (no build):** run the patched source directly — no binary build needed for testing changes/patches. `./dev-serve.sh` (repo root) mirrors the built binary: same env (`OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`) + `serve --hostname 0.0.0.0 --port 4096 --mdns`. Edit a file → `Ctrl-C` → rerun.
+- Command is `bun --conditions=browser --define 'OPENCODE_VERSION="1.18.21"' --define 'OPENCODE_CHANNEL="prod"' <src>/packages/opencode/src/index.ts serve …`. Run the file **directly** (`bun [flags] file.ts`), not `bun run file.ts` — `--define` is not a `bun run` subcommand flag (it prints usage and exits).
+- The `--define` flags mirror the prod binary (source otherwise falls back to `version="local"`, `channel="local"`); keep `channel=prod` or the new-UI layout default flips.
+- **Web UI:** source mode proxies it from `https://app.opencode.ai` — the embedded `opencode-web-ui.gen.ts` only resolves under `Bun.build` (a no-`./` import specifier). Fine for backend/patch testing (UI still hits your patched API); run `bun run dev:web` (Vite) separately for the patched UI.
+- `OPENCODE_MODELS_DEV` is unset at source, so the first model-list load fetches `models.opencode.ai` (5-min cache under `Global.Path.cache`).
+- Overrides: `DEV_SERVE_HOST`, `DEV_SERVE_PORT`, `DEV_SERVE_MDNS` (0/1), `OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`. Extra args forward to `opencode serve`.
+
 **UI toggle:** New layout is controlled by `newLayoutDesigns` in browser localStorage key `settings.v3` under `general`. Toggle in Settings → General → "New layout". Sunset date: Sept 14, 2026 (old UI forced off after).
 
 **Patches:** `patches/apply.sh` header is the source of truth for patch set, apply order, dependency constraints, and dropped patches. `README.md` has the same info summarized.
