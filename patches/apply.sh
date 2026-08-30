@@ -8,7 +8,8 @@
 # rolled forward v1.18.3 -> v1.18.15 on 2026-08-09 -> v1.18.21 on 2026-08-23,
 # then aligned 2026-08-23 to johnnymo87/opencode-patched upstream/main @ 853da6382
 # (v1.18.18, 27 active) — adopt parent's new patches, drop divergences except
-# user-requested exclusions; + sse-heartbeat-4s added 2026-08-27 (30 total)):
+# user-requested exclusions; + sse-heartbeat-4s added 2026-08-27,
+# + ui-asset-compression-cache added 2026-08-28 (31 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -66,6 +67,22 @@
 #       idle-kill of idle SSE streams); shared file handlers/event.ts with event-session-scope (#4) and
 #       event-cold-start-directory (#5), disjoint hunks (heartbeat line sits below both patches' regions)
 #       -> MUST apply after #5
+#   31. ui-asset-compression-cache.patch (local) - gzip-eligible body + cache-control on embedded UI
+#       assets. Fixes: catch-all served via HttpServerResponse.raw (body _tag "Raw"), which the
+#       compression middleware (httpapi middleware compression.ts:41) declines -> 2.7 MB index-*.js
+#       bundle transferred uncompressed, and no cache-control on any embedded asset (full re-fetch
+#       on every reload). Switches the body to HttpServerResponse.uint8Array(body, { headers })
+#       (contentType flows from headers; passes every compression gate) and sets cache-control:
+#       hashed assets/* -> "public, max-age=31536000, immutable", stable-named files (index.html,
+#       manifest, icons, Inter.ttf, JetBrainsMonoNerdFontMono-Regular.woff2) -> "no-cache".
+#       Hash rule verified against v1.18.21 dist: Vite's 8-char hashes use charset [A-Za-z0-9_-]
+#       (hashes may contain - and _, e.g. B-XKn8Dv); the only stable-named assets/ files are
+#       Inter.ttf and JetBrainsMonoNerdFontMono-Regular.woff2 (7-char "Regular" suffix -> correctly
+#       no-cache); 934 of 952 embedded files come out immutable. Measured: index-KXP1iLE3.js
+#       2,741,090 B -> 814,864 B gzipped (~3.4x). Layer offers gzip/deflate only (no br/zstd) and
+#       gzips per request (no dist changes, no prebuilt .gz). Context: docs/plans/2026-08-28-wsl2-nat-
+#       burst-stagger-proxy.md "Complementary server-side" section.
+#       Order-independent (touches only shared/ui.ts; no other patch modifies it)
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -126,6 +143,7 @@ PATCH_NAMES=(
   status-popover-widen
   plugin-outdated-indicator
   sse-heartbeat-4s
+  ui-asset-compression-cache
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then

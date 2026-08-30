@@ -1,0 +1,44 @@
+diff --git a/packages/opencode/src/server/shared/ui.ts b/packages/opencode/src/server/shared/ui.ts
+index d3f2c45113..a0e03c9366 100644
+--- a/packages/opencode/src/server/shared/ui.ts
++++ b/packages/opencode/src/server/shared/ui.ts
+@@ -52,13 +52,20 @@ function notFound() {
+   return HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })
+ }
+ 
+-function embeddedUIResponse(file: string, body: Uint8Array) {
+-  const mime = FSUtil.mimeType(file)
++// Vite content-hashes assets under assets/ (8-char [A-Za-z0-9_-] suffix, hash may
++// itself contain - or _); stable-named files (Inter.ttf,
++// JetBrainsMonoNerdFontMono-Regular.woff2, manifest, icons) must stay no-cache so
++// content updates propagate.
++function embeddedUIResponse(name: string, body: Uint8Array) {
++  const mime = FSUtil.mimeType(name)
+   const headers = new Headers({ "content-type": mime })
+   if (mime.startsWith("text/html")) {
+     headers.set("content-security-policy", cspForHtml(new TextDecoder().decode(body)))
+   }
+-  return HttpServerResponse.raw(body, { headers })
++  const hashedAsset = name.startsWith("assets/") && /-[_A-Za-z0-9-]{8}\.[a-z0-9]+$/.test(name)
++  headers.set("cache-control", hashedAsset ? "public, max-age=31536000, immutable" : "no-cache")
++  // Uint8Array body (not .raw) so the compression middleware can gzip it
++  return HttpServerResponse.uint8Array(body, { headers })
+ }
+ 
+ export function serveEmbeddedUIEffect(
+@@ -66,11 +73,13 @@ export function serveEmbeddedUIEffect(
+   fs: FSUtil.Interface,
+   embeddedWebUI: Record<string, string>,
+ ) {
+-  const file = embeddedWebUI[requestPath.replace(/^\//, "")] ?? embeddedWebUI["index.html"] ?? null
++  const key = requestPath.replace(/^\//, "")
++  const name = key in embeddedWebUI ? key : "index.html"
++  const file = embeddedWebUI[name]
+   if (!file) return Effect.succeed(notFound())
+ 
+   return fs.readFile(file).pipe(
+-    Effect.map((body) => embeddedUIResponse(file, body)),
++    Effect.map((body) => embeddedUIResponse(name, body)),
+     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(notFound())),
+   )
+ }

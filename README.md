@@ -6,7 +6,7 @@ onto upstream release tags. The stack is aligned with the
 patches adopted from there are rebased onto each new release here, plus
 locally-authored patches.
 
-Currently tracking **v1.18.21** (rebased 2026-08-23; 30 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
+Currently tracking **v1.18.21** (rebased 2026-08-23; 31 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
 
 ## Patch stack
 
@@ -47,6 +47,7 @@ is a summary.
 | 28 | `status-popover-widen.patch` | local | widen status popover 360px → 600px so plugin/MCP identifiers aren't truncated to their URL/path prefix |
 | 29 | `plugin-outdated-indicator.patch` | local | plugin version/outdated indicator: `GET /plugin` route + `isOutdated` (semver vs latest stable) + status-popover plugin tab (targeted v2 SDK additions, not full regen) |
 | 30 | `sse-heartbeat-4s.patch` | local | lower SSE heartbeat tick 10s → 4s (prevents WSL2 NAT idle-kill of idle SSE streams) (apply after #5) |
+| 31 | `ui-asset-compression-cache.patch` | local | embedded UI assets: gzip-eligible body (2,741,090 B → 814,864 B gz) + cache-control (hashed `assets/*` immutable, stable names no-cache) |
 
 Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5.
 
