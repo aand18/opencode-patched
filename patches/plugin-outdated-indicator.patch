@@ -221,10 +221,10 @@ index 62d4dc1ae..742c9bbc9 100644
    "session.share.popover.description.shared":
 diff --git a/packages/opencode/src/plugin/info.ts b/packages/opencode/src/plugin/info.ts
 new file mode 100644
-index 000000000..31401e0ca
+index 0000000000..91a4b0679c
 --- /dev/null
 +++ b/packages/opencode/src/plugin/info.ts
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,389 @@
 +import path from "path"
 +import { fileURLToPath } from "url"
 +import npa from "npm-package-arg"
@@ -528,19 +528,36 @@ index 000000000..31401e0ca
 +    return yield* Effect.all(specs.map((spec) => one(spec)), { concurrency: 8 })
 +  })
 +
++  // Config.loadGlobal merges the global config with the config directory as the plugin origin source,
++  // so origin.source may be a directory for plugins declared globally. Probe the same files that
++  // loadGlobal reads, in load order, and rewrite the first one containing the spec.
++  const globalConfigFileNames = ["config.json", "opencode.json", "opencode.jsonc"]
++
 +  const rewritePluginEntry = Effect.fn("PluginInfo.rewritePluginEntry")(function* (
-+    file: string,
++    source: string,
 +    oldSpec: string,
 +    newSpec: string,
 +  ) {
-+    const text = yield* deps.fs.readFileString(file).pipe(
-+      Effect.mapError(() => new PluginUpdateError({ message: `cannot read config file: ${file}` })),
-+    )
-+    const next = rewritePluginSpec(text, oldSpec, newSpec)
-+    if (next === undefined) return yield* new PluginUpdateError({ message: `plugin not found in config file: ${file}` })
-+    yield* deps.fs.writeFileString(file, next).pipe(
-+      Effect.mapError(() => new PluginUpdateError({ message: `cannot write config file: ${file}` })),
-+    )
++    const candidates = (yield* deps.fs.isFile(source))
++      ? [source]
++      : (yield* deps.fs.isDir(source))
++        ? globalConfigFileNames.map((name) => path.join(source, name))
++        : []
++    if (candidates.length === 0)
++      return yield* new PluginUpdateError({ message: `cannot locate config file: ${source}` })
++    for (const file of candidates) {
++      if (!(yield* deps.fs.isFile(file))) continue
++      const text = yield* deps.fs.readFileString(file).pipe(
++        Effect.mapError(() => new PluginUpdateError({ message: `cannot read config file: ${file}` })),
++      )
++      const next = rewritePluginSpec(text, oldSpec, newSpec)
++      if (next === undefined) continue
++      yield* deps.fs.writeFileString(file, next).pipe(
++        Effect.mapError(() => new PluginUpdateError({ message: `cannot write config file: ${file}` })),
++      )
++      return
++    }
++    yield* new PluginUpdateError({ message: `plugin not found in config file: ${source}` })
 +  })
 +
 +  const update = Effect.fn("PluginInfo.update")(function* (
@@ -762,10 +779,10 @@ index fb9d2db65..b67f79c1e 100644
    ProviderAuth.node,
 diff --git a/packages/opencode/test/plugin/info.test.ts b/packages/opencode/test/plugin/info.test.ts
 new file mode 100644
-index 000000000..fa9da5860
+index 0000000000..d5e57846a4
 --- /dev/null
 +++ b/packages/opencode/test/plugin/info.test.ts
-@@ -0,0 +1,484 @@
+@@ -0,0 +1,541 @@
 +import { describe, expect, test } from "bun:test"
 +import fs from "fs/promises"
 +import path from "path"
@@ -1047,6 +1064,28 @@ index 000000000..fa9da5860
 +        },
 +        catch: (e) => e as Error,
 +      }),
++    isFile: (file: string) =>
++      Effect.tryPromise({
++        try: async () => {
++          try {
++            return (await fs.stat(file)).isFile()
++          } catch {
++            return false
++          }
++        },
++        catch: (e) => e as Error,
++      }),
++    isDir: (file: string) =>
++      Effect.tryPromise({
++        try: async () => {
++          try {
++            return (await fs.stat(file)).isDirectory()
++          } catch {
++            return false
++          }
++        },
++        catch: (e) => e as Error,
++      }),
 +  }
 +  const spawnerFake = {
 +    string: (cmd: { command: string; args: readonly string[] }) => {
@@ -1211,6 +1250,41 @@ index 000000000..fa9da5860
 +    expect(item.latest).toBe("2.0.0")
 +  })
 +
++  test("resolves a directory origin source to the config file that declares the spec", async () => {
++    await using tmp = await tmpdir()
++    const configDir = path.join(tmp.path, "config")
++    const cfgFile = path.join(configDir, "opencode.json")
++    await fs.mkdir(configDir, { recursive: true })
++    await fs.writeFile(cfgFile, JSON.stringify({ plugin: ["acme@1.0.0"] }))
++    const { deps, counters } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: configDir }] },
++      npm: { "dist-tags": { latest: "2.0.0" }, versions: { "1.0.0": {}, "2.0.0": {} } },
++    })
++    const item = await Effect.runPromise(makeService(deps).update({ spec: "acme@1.0.0", version: "2.0.0" }))
++    expect(JSON.parse(await fs.readFile(cfgFile, "utf8"))).toEqual({ plugin: ["acme@2.0.0"] })
++    expect(counters.invalidate).toBe(1)
++    expect(item.spec).toBe("acme@2.0.0")
++  })
++
++  test("picks the candidate file that contains the spec when the origin source is a directory", async () => {
++    await using tmp = await tmpdir()
++    const configDir = path.join(tmp.path, "config")
++    const jsonFile = path.join(configDir, "opencode.json")
++    const jsoncFile = path.join(configDir, "opencode.jsonc")
++    await fs.mkdir(configDir, { recursive: true })
++    await fs.writeFile(jsonFile, JSON.stringify({ plugin: ["other@1.0.0"] }))
++    await fs.writeFile(jsoncFile, JSON.stringify({ plugin: ["acme@1.0.0"] }))
++    const { deps } = makeDeps({
++      dir: tmp.path,
++      config: { plugin: ["acme@1.0.0"], plugin_origins: [{ spec: "acme@1.0.0", source: configDir }] },
++      npm: { "dist-tags": { latest: "2.0.0" }, versions: { "1.0.0": {}, "2.0.0": {} } },
++    })
++    await Effect.runPromise(makeService(deps).update({ spec: "acme@1.0.0", version: "2.0.0" }))
++    expect(JSON.parse(await fs.readFile(jsoncFile, "utf8"))).toEqual({ plugin: ["acme@2.0.0"] })
++    expect(JSON.parse(await fs.readFile(jsonFile, "utf8"))).toEqual({ plugin: ["other@1.0.0"] })
++  })
++
 +  test("rejects a version that is not available", async () => {
 +    await using tmp = await tmpdir()
 +    const cfgFile = path.join(tmp.path, "config.json")
@@ -1250,6 +1324,7 @@ index 000000000..fa9da5860
 +    ).rejects.toMatchObject({ _tag: "PluginUpdateError" })
 +  })
 +})
+
 diff --git a/packages/sdk/js/src/v2/gen/sdk.gen.ts b/packages/sdk/js/src/v2/gen/sdk.gen.ts
 index 19d7632bf..416a75aa0 100644
 --- a/packages/sdk/js/src/v2/gen/sdk.gen.ts
