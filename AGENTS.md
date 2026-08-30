@@ -7,6 +7,7 @@
 **CRITICAL:** Default bash workdir is `/home/dev/opencode-patched` (patches repo). All opencode-src git commands MUST use `workdir="/home/dev/opencode-patched/opencode-src"` to avoid accidentally resetting the wrong repo.
 
 **Build:** `OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
+- **Fast path (local iteration): append `--single`** — builds only the current platform (`opencode-linux-x64`) instead of all 12 targets. Verified 2026-08-30: ~29 s vs ~5 min for the full build, smoke test included. Use for patch iteration; the full multi-target build is only needed for release/publishing. Optional extra: `--skip-install` additionally skips the cross-platform `bun install --os="*"` steps — only safe when dependencies have not changed since the last `bun install`.
 - `OPENCODE_VERSION` MUST be set to a version that exists on npm (e.g., `1.18.21`), otherwise plugin dependency resolution will fail: `@opencode-ai/plugin@0.0.0-prod-...` 404s on npm.
 - After switching to a new release tag, run `bun install` first — v1.18.15+ vendors `@opencode-ai/client` as a tarball (`packages/app/vendor/`), and without it the app build fails on `@opencode-ai/client/promise` resolution.
 - Without `OPENCODE_CHANNEL=prod`, channel defaults to git branch name (non-prod), which defaults the new UI layout to `true` and hides the old UI toggle.

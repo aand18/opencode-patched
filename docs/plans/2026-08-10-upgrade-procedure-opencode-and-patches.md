@@ -68,7 +68,13 @@ with applied patches by design.
    - `OPENCODE_CHANNEL=prod` — without it the channel defaults to the git branch
      name (non-prod), which forcibly enables the new UI layout and hides the old
      UI toggle.
-   - Binary lands at `packages/opencode/dist/opencode-linux-x64/bin/opencode`.
+    - Binary lands at `packages/opencode/dist/opencode-linux-x64/bin/opencode`.
+    - **Fast path:** append `--single` to build only the current platform
+      (`opencode-linux-x64`) instead of all 12 targets — ~29 s vs ~5 min
+      (verified 2026-08-30, smoke included). Correct for local iteration;
+      use the full build for release/publishing. `--skip-install` (optional)
+      also skips the cross-platform `bun install --os="*"` steps — only when
+      dependencies are unchanged.
 
 ## Phase 2 — Install + DB backup (verified procedure)
 
