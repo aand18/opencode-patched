@@ -95,7 +95,10 @@ no spaces → overflow), `break-all` (forces 2 lines per entry, list 2× taller)
 name-extraction (changes displayed content, loses the path). The width is duplicated in
 six places (old-layout + V2 popover classes + 2 Suspense fallbacks + 2 body
 containers) and must stay in sync; placement `bottom-end` + `shift -168` stays anchored
-with the wider panel, `max-w-[calc(100vw-40px)]` clamps narrow viewports.
+with the wider panel. All six sites carry `max-w-[calc(100vw-40px)]` — the 4 inner ones
+(2 Suspense fallbacks + 2 body containers) were previously uncapped, and on a 390px
+viewport the 600px inner overflowed 242px (right edge 632 → 382 after the cap), cutting
+the plugin list + version chevrons off the right edge.
 
 ## Patch independence
 

@@ -7,7 +7,7 @@ index 97982fa21f..b97576ed38 100644
  function ServerStatusPopoverView(props: { state: ServerStatusState }) {
    return (
 -    <div class="flex items-center gap-1 w-[360px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
-+    <div class="flex items-center gap-1 w-[600px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
++    <div class="flex items-center gap-1 w-[600px] max-w-[calc(100vw-40px)] rounded-xl shadow-[var(--shadow-lg-border-base)]">
        <Tabs
          aria-label={props.state.ariaLabel}
          class="tabs bg-background-strong rounded-xl overflow-hidden"
@@ -16,7 +16,7 @@ index 97982fa21f..b97576ed38 100644
  
    return (
 -    <div class="flex items-center gap-1 w-[360px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
-+    <div class="flex items-center gap-1 w-[600px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
++    <div class="flex items-center gap-1 w-[600px] max-w-[calc(100vw-40px)] rounded-xl shadow-[var(--shadow-lg-border-base)]">
        <Tabs
          aria-label={language.t("status.popover.ariaLabel")}
          class="tabs bg-background-strong rounded-xl overflow-hidden"
@@ -38,7 +38,7 @@ index 767e7e62c6..2e0ef38360 100644
          <Suspense
            fallback={
 -            <div class="w-[360px] h-14 rounded-xl bg-background-strong shadow-[var(--shadow-lg-border-base)]" />
-+            <div class="w-[600px] h-14 rounded-xl bg-background-strong shadow-[var(--shadow-lg-border-base)]" />
++            <div class="w-[600px] max-w-[calc(100vw-40px)] h-14 rounded-xl bg-background-strong shadow-[var(--shadow-lg-border-base)]" />
            }
          >
            <Body shown={shown} />
@@ -47,7 +47,7 @@ index 767e7e62c6..2e0ef38360 100644
      <Show when={props.shown}>
        <Suspense
 -        fallback={<div class="w-[360px] h-14 rounded-xl bg-background-strong shadow-[var(--shadow-lg-border-base)]" />}
-+        fallback={<div class="w-[600px] h-14 rounded-xl bg-background-strong shadow-[var(--shadow-lg-border-base)]" />}
++        fallback={<div class="w-[600px] max-w-[calc(100vw-40px)] h-14 rounded-xl bg-background-strong shadow-[var(--shadow-lg-border-base)]" />}
        >
          {props.children}
        </Suspense>

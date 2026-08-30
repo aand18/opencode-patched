@@ -55,14 +55,17 @@
 #       leaves ~120px headroom, >=530px is the floor. Width is duplicated in SIX places and must stay in
 #       sync (else 360->600 jump on lazy-load / narrow V2): status-popover.tsx old-layout + V2 popover
 #       classes + 2 Suspense fallbacks, status-popover-body.tsx 2 body containers. Placement bottom-end +
-#       shift -168 stays anchored (panel extends left); max-w-[calc(100vw-40px)] clamps narrow viewports.
+#       shift -168 stays anchored (panel extends left). ALL SIX sites carry max-w-[calc(100vw-40px)]
+#       (not just the 2 outer popover classes) -- the 4 inner ones (2 Suspense fallbacks + 2 body containers)
+#       were previously uncapped: on a 390px viewport the 600px inner overflowed 242px (right edge 632 ->
+#       382 after the cap), cutting the plugin list + version chevrons off the right edge.
 #       Rejected: break-words (URLs have no spaces -> overflow), break-all (2 lines per entry -> list 2x
 #       taller), name-extraction (changes displayed content, loses the path).
 #   29. plugin-outdated-indicator.patch (local) - plugin version/outdated indicator: GET /plugin route
 #       (PluginInfo node + pluginHandlers wired in server.ts), isOutdated = semver.lt(installed, latest-stable),
 #       and a status-popover plugin tab. SDK is a TARGETED v2 addition (Plugin class + 12 Plugin* types incl.
 #       PluginError, getter, 4 imports), NOT a full regen -- full regen restructures Session2 and drops #19's
-#       mcpStatus/mcpConnect additions -> TUI typecheck errors. order-independent
+#       mcpStatus/mcpConnect additions -> TUI typecheck errors. MUST follow #28 (its status-popover-body.tsx context includes #28's capped body-root div).
 #   30. sse-heartbeat-4s.patch     (local)     - lower SSE heartbeat tick 10s -> 4s (prevents WSL2 NAT
 #       idle-kill of idle SSE streams); shared file handlers/event.ts with event-session-scope (#4) and
 #       event-cold-start-directory (#5), disjoint hunks (heartbeat line sits below both patches' regions)

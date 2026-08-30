@@ -97,7 +97,7 @@ index b97576ed3..8487e717e 100644
 +  )
 +
    return (
-     <div class="flex items-center gap-1 w-[600px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
+     <div class="flex items-center gap-1 w-[600px] max-w-[calc(100vw-40px)] rounded-xl shadow-[var(--shadow-lg-border-base)]">
        <Tabs
 @@ -305,6 +366,7 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
          data-component="tabs"
