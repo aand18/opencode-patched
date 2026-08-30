@@ -16,8 +16,16 @@ issues we keep patching around?
 2. **Connection-burst SYN race** — `2026-08-28-wsl2-nat-burst-stagger-proxy.md`.
    The forwarder drops *simultaneous* SYNs to the same destination
    (browser per-origin burst of 6) → "Failed to reload" toasts (~1–2/6
-   pre-fix). **Fix shipped: staggered TCP reverse proxy on Windows fronting
-   :4096 (≥60 ms between upstream connects), deployed to prod, 6/6 verified.**
+   pre-fix). A staggered TCP reverse proxy on Windows (≥60 ms between
+   upstream connects) is designed + reference-implemented in that doc and
+   probe-verified (staggered dials: 6/6) but **NOT deployed** (verified
+   2026-08-30: no proxy process on Windows; the `netsh portproxy` rule
+   `0.0.0.0:4096 → 172.23.51.127:4096` is still the active forwarder).
+   Partial mitigation in prod: patch #31 (2026-08-28, `Cache-Control:
+   immutable` + gzip) stops warm reloads from re-bursting (hashed assets
+   served from disk cache) — cold-load bursts can still race. Note: that
+   doc's TL;DR line "Deployed to prod `:4096`" refers to patch #31, not the
+   proxy — easy to misread.
 3. **localhost-forward artifact** — Windows → `127.0.0.1:port` for a server
    bound *only* to 127.0.0.1 inside WSL: RST after ~2–3 s (different
    signature from the idle-kill). Avoided by 0.0.0.0 binds.
@@ -47,9 +55,10 @@ Feasibility notes:
 ## Pros
 
 - **Browser path = pure localhost.** All four documented NAT failure classes
-  gone by construction. No 4 s heartbeat needed on that path (could relax
-  patch #30 later), no staggered proxy process to keep running, no
-  per-port forwarder state to clog.
+  gone by construction — including the burst race, whose staggered-proxy fix
+  exists on paper but was never deployed (see context #2). No 4 s heartbeat
+  needed on that path (could relax patch #30 later), no per-port forwarder
+  state to clog.
 - **Phone/LAN access direct** — server binds the Windows host's LAN IP; no
   portproxy rule, no forwarder in the path.
 - **chrome-devtools MCP** would run in the same OS as the Windows Chrome
@@ -92,11 +101,15 @@ Feasibility notes:
 
 ## Cheaper alternatives (same goal, less cost)
 
-1. **Status quo (recommended).** Both measured failure classes are already
-   fixed in prod and verified: patch #30 (4 s heartbeat) kills the idle-kill
-   class; the staggered proxy kills the burst class. Residuals (zombie
-   ESTAB sockets, rare per-port clog) are managed by observation, not
-   architecture.
+1. **Status quo (recommended).** The idle-kill class is fixed in prod
+   (patch #30, 4 s heartbeat, verified end-to-end). The burst class is *not*
+   fixed in prod — the staggered proxy was designed and probe-verified but
+   never deployed (2026-08-30 check: no proxy process, portproxy rule still
+   active); patch #31's cache headers only stop warm-reload bursts. If
+   "Failed to reload" toasts recur, deploy the proxy (design + reference
+   impl ready in the 2026-08-28 doc — a cheap Windows-side process, no
+   re-architecture). Residuals (zombie ESTAB sockets, rare per-port clog)
+   are managed by observation, not architecture.
 2. **Windows 11 22H2+ host** → `.wslconfig` `networkingMode=mirrored`.
    Host ↔ WSL then use `127.0.0.1` directly (no forwarder) and WSL becomes
    LAN-reachable — *the same structural fix as Windows-native, while
@@ -110,12 +123,13 @@ Feasibility notes:
 
 ## Recommendation
 
-**Do not switch to Windows-native now.** The two measured NAT failure
-classes are already structurally mitigated in prod (heartbeat + staggered
-proxy, both verified end-to-end). Windows-native's cost — abandoning the
-Linux dev environment, Linux-MCP interop (engram), DB duplication, and an
-unverified patched Windows build on an EOL OS — outweighs the marginal
-gain over the current setup.
+**Do not switch to Windows-native now.** The idle-kill class is mitigated in
+prod (4 s heartbeat, verified end-to-end); the burst class has a cheap,
+ready-made mitigation (staggered proxy — designed, probe-verified, awaiting
+deployment) plus #31's cache headers, so there is no prod incident forcing
+the move. Windows-native's cost — abandoning the Linux dev environment,
+Linux-MCP interop (engram), DB duplication, and an unverified patched
+Windows build on an EOL OS — outweighs the gain of removing the forwarder.
 
 Revisit triggers:
 - WSL2 forwarder regression reappears after a Windows update (the forwarder
