@@ -67,9 +67,21 @@
 #       PluginError, getter, 4 imports), NOT a full regen -- full regen restructures Session2 and drops #19's
 #       mcpStatus/mcpConnect additions -> TUI typecheck errors. MUST follow #28 (its status-popover-body.tsx context includes #28's capped body-root div).
 #   30. sse-heartbeat-4s.patch     (local)     - lower SSE heartbeat tick 10s -> 4s (prevents WSL2 NAT
-#       idle-kill of idle SSE streams); shared file handlers/event.ts with event-session-scope (#4) and
-#       event-cold-start-directory (#5), disjoint hunks (heartbeat line sits below both patches' regions)
-#       -> MUST apply after #5
+#       idle-kill of idle SSE streams). WHY (evidence-derived, not guessed): the Windows-side WSL2
+#       NAT forwarder kills SILENT SSE in ~5-10 s — pre-patch kills landed at 10/10/10/11/20/30 s
+#       (all multiples of the old tick) while 2/3/5 s-interval control streams survived 90-120 s
+#       through the same Windows path. 4 s sits below the whole observed band with margin on both
+#       sides (5-s data survived 90 s; 10-s data died). Revisit if a Windows/WSL update shifts the
+#       timeout. Verified post-ship (findings doc PS3/PS4): 4 s cadence on the wire (gaps
+#       2.82-4.01 s), fake 4-s SSE survived 60 s on a clean port while 10-s died, fresh-tab
+#       /global/event alive 168 s+ end-to-end, zero reconnects in 9.4 min. Cost ~100 B per event
+#       (~90 KB/h per connection); client-safe (no app/SDK code consumes server.heartbeat; one
+#       deliberate no-op in control-plane workspace.ts:399). Scope: fixes ONLY the idle-kill class
+#       — NOT clogged-path kills (<4 s), zombie/one-sided-kill detection, mid-transfer truncation,
+#       or burst-race drops (2026-08-28 doc). Full evidence:
+#       docs/plans/2026-08-27-sse-wsl2-nat-idle-kill-findings.md
+#       Shared file handlers/event.ts with event-session-scope (#4) and event-cold-start-directory
+#       (#5), disjoint hunks (heartbeat line sits below both patches' regions) -> MUST apply after #5
 #   31. ui-asset-compression-cache.patch (local) - gzip-eligible body + cache-control on embedded UI
 #       assets. Fixes: catch-all served via HttpServerResponse.raw (body _tag "Raw"), which the
 #       compression middleware (httpapi middleware compression.ts:41) declines -> 2.7 MB index-*.js
