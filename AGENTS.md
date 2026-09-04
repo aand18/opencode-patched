@@ -31,12 +31,12 @@
 - LAN testing: backend CORS allowlist defaults to localhost / 127.0.0.1 / tauri / `opencode.ai` only — a dev UI opened from another device (phone via LAN IP) shows "could not connect" until the exact UI origin is passed, e.g. `DEV_SERVE_PORT=4097 ./dev-serve.sh --cors http://192.168.88.11:4098` (verified 2026-09-04).
 - Adding the server in the dev UI: server picker → "Servers" → Add server → address `http://<host>:<port>` (name optional, username optional defaulting to `opencode`, password = `OPENCODE_SERVER_PASSWORD`), then set it as default server.
 - Auto-populate (dev UI only, `packages/app/src/entry.tsx`): `VITE_OPENCODE_SERVER_HOST` / `VITE_OPENCODE_SERVER_PORT` at vite startup set the initial server (default `localhost:4096`) — e.g. `VITE_OPENCODE_SERVER_HOST=192.168.88.11 VITE_OPENCODE_SERVER_PORT=4097 bun dev -- --port 4098`. Credentials via `?auth_token=<base64("user:password")>` (seeded as Basic auth, stripped from the URL after read). Caveat: a previously stored `defaultServerUrl` in that browser's localStorage wins — clear it or re-pick the server.
-- **Web UI validation loop (verified 2026-09-04, prod `:4096` untouched throughout):**
+- **Mobile Web UI testing — dev backend `:4097` + dev UI `:4098` (verified 2026-09-04, prod `:4096` untouched throughout):**
   1. Fresh prod copy (stop dev backend first if it holds the file): `sqlite3 $HOME/.local/share/opencode/opencode.db ".backup /tmp/opencode-dev-4097.db"`
-  2. Dev backend: `DEV_SERVE_PORT=4097 DEV_SERVE_MDNS=0 DEV_SERVE_NO_AUTH=1 OPENCODE_DB=/tmp/opencode-dev-4097.db ./dev-serve.sh --cors http://<lan-ip>:4098` (drop `--cors` for desktop-only testing)
-  3. Dev UI (pre-pointed at the dev backend so phones need no manual add): `VITE_OPENCODE_SERVER_HOST=192.168.88.11 VITE_OPENCODE_SERVER_PORT=4097 bun dev -- --port 4098` from `opencode-src/packages/app`
-  4. Open `http://localhost:4098` (desktop) or `http://<lan-ip>:4098` (phone); add server `http://<same-host>:4097` with no credentials; validate against sessions containing the relevant tool calls
-  5. Iterate: UI edits hot-reload via Vite; backend edits need dev-backend restart; re-copy the DB when it goes stale
+  2. Dev backend (no password, LAN CORS for the phone UI): `DEV_SERVE_PORT=4097 DEV_SERVE_MDNS=0 DEV_SERVE_NO_AUTH=1 OPENCODE_DB=/tmp/opencode-dev-4097.db ./dev-serve.sh --cors http://192.168.88.11:4098` (drop `--cors` for desktop-only testing)
+  3. Dev UI (pre-pointed at the dev backend so the phone needs no manual server add): `VITE_OPENCODE_SERVER_HOST=192.168.88.11 VITE_OPENCODE_SERVER_PORT=4097 bun dev -- --port 4098` from `opencode-src/packages/app`
+  4. On the phone open `http://192.168.88.11:4098` (desktop: `http://localhost:4098`); the `:4097` dev backend is already the default server and needs no credentials; validate against sessions containing the relevant tool calls
+  5. Iterate: UI edits hot-reload via Vite (phone needs only a refresh); backend edits need dev-backend restart; re-copy the DB when it goes stale
   6. Cleanup per above when done
 
 **UI toggle:** New layout is controlled by `newLayoutDesigns` in browser localStorage key `settings.v3` under `general`. Toggle in Settings → General → "New layout". Sunset date: Sept 14, 2026 (old UI forced off after).
