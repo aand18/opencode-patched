@@ -10,7 +10,8 @@
 # (v1.18.18, 27 active) — adopt parent's new patches, drop divergences except
 # user-requested exclusions; + sse-heartbeat-4s added 2026-08-27,
 # + ui-asset-compression-cache added 2026-08-28,
-# + popover-nested-overlay added 2026-08-29 (32 total)):
+# + popover-nested-overlay added 2026-08-29,
+# + generic-tool-expand added 2026-09-04 (33 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -113,6 +114,42 @@
 #       chevron click trace = focusin on [data-component=dropdown-menu-content] (outside popover)
 #       -> popover closed; post-fix build the popover stays open and the menu renders.
 #       Order-independent (no other patch touches popover.tsx)
+#   33. generic-tool-expand.patch (local) - expandable generic (unknown/MCP/custom) tool calls:
+#       GenericTool previously rendered trigger-only (no children -> BasicTool shows no
+#       chevron), so the row was just the tool name + CSS-truncated subtitle with no way
+#       to see full input/output. Now forwards open/defaultOpen/onOpenChange (timeline
+#       controlled state) + allowOpenWhilePending, and renders an expandable bordered
+#       card: input as one key/value row per field (strings as-is, JSON strings
+#       pretty-printed, arrays joined, one nesting level as subrows; deeper structures
+#       pretty-printed JSON as fallback -- never a raw single-line JSON blob), a thin
+#       separator instead of Input/Output labels (no new i18n keys), and output as
+#       the same key/value rows when it parses as a JSON object, else Markdown --
+#       or pretty-printed pre for top-level JSON arrays (stripAnsi). Values render
+#       as Markdown only on conservative signals (lists/fences/links first, then
+#       headings/bold/code unless the value looks like code), so snake_case params,
+#       globs, and `#` comments in code (e.g. ctx_execute python) stay plain text.
+#       Per-section copy buttons (always visible on touch via hover:none media
+#       query) + explicit user-select:text on details and trigger (mobile
+#       long-press otherwise cannot select, incl. the collapsed `Called` row).
+#       hideDetails tools (webfetch/task/skill) untouched. Pure row-format helper
+#       lives in new generic-tool-input.ts (client-only imports stay out of
+#       bun:test) + generic-tool.test.ts (26 tests). Input section hides when
+#       every substantial (100+ chars) input value already appears in the output
+#       (whitespace-insensitive), e.g. ctx_execute echoing its code in a fence.
+#       Multi-line values stack
+#       under the key (data-stacked); single-line values wrap below it on
+#       narrow screens via flex-basis. overflow-wrap:anywhere (+ break-word
+#       fallback) across the whole card subtree (Markdown DOM included) +
+#       left long Shiki lines in input values unwrapped (found via pasted DOM:
+#       input-section Markdown was missing the output-only pre override).
+#       Code blocks then reverted to inner horizontal scroll (max-width:100% +
+#       overflow-x:auto; JSON pretty dumps likewise) -- wrapped Python reads
+#       terribly; prose/paths/params keep wrapping, page never scrolls.
+#       Implementer: Muse Spark 1.3 (Xhigh).
+#       Order-independent (no other patch touches basic-tool.* / generic-tool-*)
+#
+# IMPLEMENTERS (model that wrote each patch; #1-32 predate attribution):
+#   #33 Muse Spark 1.3 (Xhigh); all others unknown.
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -175,6 +212,7 @@ PATCH_NAMES=(
   sse-heartbeat-4s
   ui-asset-compression-cache
   popover-nested-overlay
+  generic-tool-expand
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then

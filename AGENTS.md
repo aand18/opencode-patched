@@ -21,9 +21,23 @@
 **Dev (no build):** run the patched source directly — no binary build needed for testing changes/patches. `./dev-serve.sh` (repo root) mirrors the built binary: same env (`OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`) + `serve --hostname 0.0.0.0 --port 4096 --mdns`. Edit a file → `Ctrl-C` → rerun.
 - Command is `bun --conditions=browser --define 'OPENCODE_VERSION="1.18.21"' --define 'OPENCODE_CHANNEL="prod"' <src>/packages/opencode/src/index.ts serve …`. Run the file **directly** (`bun [flags] file.ts`), not `bun run file.ts` — `--define` is not a `bun run` subcommand flag (it prints usage and exits).
 - The `--define` flags mirror the prod binary (source otherwise falls back to `version="local"`, `channel="local"`); keep `channel=prod` or the new-UI layout default flips.
-- **Web UI:** source mode proxies it from `https://app.opencode.ai` — the embedded `opencode-web-ui.gen.ts` only resolves under `Bun.build` (a no-`./` import specifier). Fine for backend/patch testing (UI still hits your patched API); run `bun run dev:web` (Vite) separately for the patched UI.
+- **Web UI:** source mode proxies it from `https://app.opencode.ai` — the embedded `opencode-web-ui.gen.ts` only resolves under `Bun.build` (a no-`./` import specifier). Fine for backend/patch testing (UI still hits your patched API); run `bun run dev:web` (Vite) separately for the patched UI. The backend's own port therefore never shows local session-ui/app changes — always verify UI patches in the Vite dev UI.
 - `OPENCODE_MODELS_DEV` is unset at source, so the first model-list load fetches `models.opencode.ai` (5-min cache under `Global.Path.cache`).
-- Overrides: `DEV_SERVE_HOST`, `DEV_SERVE_PORT`, `DEV_SERVE_MDNS` (0/1), `OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`. Extra args forward to `opencode serve`.
+- Overrides: `DEV_SERVE_HOST`, `DEV_SERVE_PORT`, `DEV_SERVE_MDNS` (0/1), `OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`, `DEV_SERVE_NO_AUTH` (0/1). Extra args forward to `opencode serve`.
+- Testing without a password: `DEV_SERVE_NO_AUTH=1` unsets `OPENCODE_SERVER_PASSWORD` (server auth is skipped when it is unset/empty), so dev servers can be added in the dev UI with no credentials. Testing-only — prod always keeps its password.
+- Dev database: never point a dev backend at the prod DB file (SQLite lock contention with the prod server). Copy it to tmp first via the online backup API — plain `cp` misses the WAL tail: `sqlite3 $HOME/.local/share/opencode/opencode.db ".backup /tmp/opencode-dev.db"`, then `OPENCODE_DB=/tmp/opencode-dev.db`. Re-copy when the copy goes stale (prod keeps changing).
+- Cleanup when done: stop the dev backend + Vite dev UI, then `rm -f /tmp/opencode-dev.db*` (also removes `-wal`/`-shm` sidecars). Optionally remove the test server entries in the dev UI server picker.
+- Dev UI against prod backend: works from desktop only — the CORS allowlist covers any `http://localhost:<port>` origin, so the Vite dev UI can add `http://localhost:4096` (+ password) with no restarts. From a LAN IP it is blocked (prod can't take `--cors` without a restart — don't). Sensible only for read-only checks of display-only changes when versions match (verified 2026-09-04: prod binary and source both at v1.18.21); the dev UI can otherwise issue real mutations (prompts, revert, fork, delete) against prod sessions, so interactive testing stays on the dev backend.
+- LAN testing: backend CORS allowlist defaults to localhost / 127.0.0.1 / tauri / `opencode.ai` only — a dev UI opened from another device (phone via LAN IP) shows "could not connect" until the exact UI origin is passed, e.g. `DEV_SERVE_PORT=4097 ./dev-serve.sh --cors http://192.168.88.11:4098` (verified 2026-09-04).
+- Adding the server in the dev UI: server picker → "Servers" → Add server → address `http://<host>:<port>` (name optional, username optional defaulting to `opencode`, password = `OPENCODE_SERVER_PASSWORD`), then set it as default server.
+- Auto-populate (dev UI only, `packages/app/src/entry.tsx`): `VITE_OPENCODE_SERVER_HOST` / `VITE_OPENCODE_SERVER_PORT` at vite startup set the initial server (default `localhost:4096`) — e.g. `VITE_OPENCODE_SERVER_HOST=192.168.88.11 VITE_OPENCODE_SERVER_PORT=4097 bun dev -- --port 4098`. Credentials via `?auth_token=<base64("user:password")>` (seeded as Basic auth, stripped from the URL after read). Caveat: a previously stored `defaultServerUrl` in that browser's localStorage wins — clear it or re-pick the server.
+- **Web UI validation loop (verified 2026-09-04, prod `:4096` untouched throughout):**
+  1. Fresh prod copy (stop dev backend first if it holds the file): `sqlite3 $HOME/.local/share/opencode/opencode.db ".backup /tmp/opencode-dev-4097.db"`
+  2. Dev backend: `DEV_SERVE_PORT=4097 DEV_SERVE_MDNS=0 DEV_SERVE_NO_AUTH=1 OPENCODE_DB=/tmp/opencode-dev-4097.db ./dev-serve.sh --cors http://<lan-ip>:4098` (drop `--cors` for desktop-only testing)
+  3. Dev UI (pre-pointed at the dev backend so phones need no manual add): `VITE_OPENCODE_SERVER_HOST=192.168.88.11 VITE_OPENCODE_SERVER_PORT=4097 bun dev -- --port 4098` from `opencode-src/packages/app`
+  4. Open `http://localhost:4098` (desktop) or `http://<lan-ip>:4098` (phone); add server `http://<same-host>:4097` with no credentials; validate against sessions containing the relevant tool calls
+  5. Iterate: UI edits hot-reload via Vite; backend edits need dev-backend restart; re-copy the DB when it goes stale
+  6. Cleanup per above when done
 
 **UI toggle:** New layout is controlled by `newLayoutDesigns` in browser localStorage key `settings.v3` under `general`. Toggle in Settings → General → "New layout". Sunset date: Sept 14, 2026 (old UI forced off after).
 
@@ -37,7 +51,7 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 Roll forward to a new upstream release:
 1. Fetch new tag into opencode-src (detached HEAD at tag; create local tag from FETCH_HEAD)
 2. Run `bun install` (v1.18.15+ vendors `@opencode-ai/client` tarball)
-3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (32/32 at v1.18.21)
+3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (33/33 at v1.18.21)
 4. Build, install binary (versioned name + `.bak.{TIMESTAMP}` DB backup)
 5. Update version pins: `AGENTS.md`, `README.md`, `apply.sh` header
 6. Commit in patches repo only (never commit in opencode-src)

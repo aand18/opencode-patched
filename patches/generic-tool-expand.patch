@@ -1,0 +1,813 @@
+diff --git a/packages/session-ui/src/components/basic-tool.css b/packages/session-ui/src/components/basic-tool.css
+index f8f20c9ffa..1beee80504 100644
+--- a/packages/session-ui/src/components/basic-tool.css
++++ b/packages/session-ui/src/components/basic-tool.css
+@@ -60,6 +60,9 @@
+     min-width: 0;
+     max-width: 100%;
+     font-size: 14px;
++    user-select: text;
++    -webkit-user-select: text;
++    -webkit-touch-callout: default;
+   }
+ 
+   [data-slot="basic-tool-tool-info-structured"] {
+@@ -170,6 +173,171 @@
+   }
+ }
+ 
++[data-component="generic-tool-details"] {
++  direction: ltr;
++  unicode-bidi: isolate;
++  width: 100%;
++  border: 0.5px solid var(--v2-border-border-base);
++  border-radius: 6px;
++  background: transparent;
++  overflow: hidden;
++  display: flex;
++  flex-direction: column;
++  gap: 0;
++  min-width: 0;
++  user-select: text;
++  -webkit-user-select: text;
++  -webkit-touch-callout: default;
++
++  &,
++  & * {
++    overflow-wrap: anywhere;
++    word-break: break-word;
++  }
++
++  [data-slot="generic-tool-section"] {
++    position: relative;
++    padding: 12px;
++    min-width: 0;
++  }
++
++  [data-slot="generic-copy"] {
++    position: absolute;
++    top: 4px;
++    right: 4px;
++    opacity: 0;
++    pointer-events: none;
++    transition: opacity 0.15s ease;
++    z-index: 1;
++  }
++
++  &:hover [data-slot="generic-copy"],
++  &:focus-within [data-slot="generic-copy"] {
++    opacity: 1;
++    pointer-events: auto;
++  }
++
++  @media (hover: none) {
++    [data-slot="generic-copy"] {
++      opacity: 1;
++      pointer-events: auto;
++    }
++  }
++
++  [data-slot="generic-tool-separator"] {
++    height: 0;
++    margin: 0 12px;
++    border-top: 0.5px solid var(--v2-border-border-base);
++  }
++
++  [data-slot="generic-tool-input-list"] {
++    margin: 0;
++    padding: 0;
++    padding-right: 28px;
++    display: flex;
++    flex-direction: column;
++    gap: 6px;
++    max-height: 240px;
++    overflow-y: auto;
++    scrollbar-width: none;
++    -ms-overflow-style: none;
++
++    &::-webkit-scrollbar {
++      display: none;
++    }
++  }
++
++  [data-slot="generic-tool-input-row"] {
++    display: flex;
++    flex-wrap: wrap;
++    align-items: baseline;
++    gap: 4px 8px;
++    min-width: 0;
++
++    &[data-nested="true"] {
++      padding-left: 16px;
++    }
++
++    &[data-stacked="true"] {
++      flex-direction: column;
++      align-items: stretch;
++    }
++  }
++
++  [data-slot="generic-tool-input-key"] {
++    flex-shrink: 0;
++    font-family: var(--font-family-mono);
++    font-size: 13px;
++    line-height: var(--line-height-large);
++    color: var(--v2-text-text-muted);
++  }
++
++  [data-slot="generic-tool-input-value"] {
++    margin: 0;
++    min-width: 0;
++    flex: 1 1 12rem;
++    font-family: var(--font-family-sans);
++    font-variant-numeric: tabular-nums;
++    font-size: 13px;
++    line-height: var(--line-height-large);
++    color: var(--v2-text-text-base);
++    white-space: pre-wrap;
++    overflow-wrap: anywhere;
++  }
++
++  [data-slot="generic-tool-input-value"] [data-component="markdown"] > :first-child {
++    margin-top: 0;
++  }
++
++  [data-slot="generic-tool-input-value"] [data-component="markdown"] > :last-child {
++    margin-bottom: 0;
++  }
++
++  [data-slot="generic-tool-markdown"],
++  [data-slot="generic-tool-json"] {
++    width: 100%;
++    min-width: 0;
++    padding-right: 28px;
++    overflow-y: auto;
++    overflow-x: auto;
++    max-height: 240px;
++    scrollbar-width: none;
++    -ms-overflow-style: none;
++
++    &::-webkit-scrollbar {
++      display: none;
++    }
++  }
++
++  [data-slot="generic-tool-markdown"] [data-component="markdown"] {
++    min-width: 0;
++    max-width: 100%;
++  }
++
++  [data-component="markdown"] pre {
++    max-width: 100%;
++    overflow-x: auto;
++  }
++
++  [data-slot="generic-tool-markdown"] [data-component="markdown"] {
++    width: 100%;
++    min-width: 0;
++  }
++
++  [data-slot="generic-tool-pre"] {
++    margin: 0;
++    padding: 0;
++  }
++
++  [data-slot="generic-tool-pre"] code {
++    font-family: var(--font-family-mono);
++    font-feature-settings: var(--font-family-mono--font-feature-settings);
++    font-size: 13px;
++    line-height: var(--line-height-large);
++    white-space: pre;
++  }
++}
++
+ [data-component="task-tool-card"] {
+   width: 100%;
+   min-width: 0;
+diff --git a/packages/session-ui/src/components/basic-tool.tsx b/packages/session-ui/src/components/basic-tool.tsx
+index efc15c173f..977442a994 100644
+--- a/packages/session-ui/src/components/basic-tool.tsx
++++ b/packages/session-ui/src/components/basic-tool.tsx
+@@ -1,10 +1,39 @@
+-import { createEffect, For, Match, on, onCleanup, onMount, Show, Switch, type Accessor, type JSX } from "solid-js"
++import {
++  createEffect,
++  createMemo,
++  createSignal,
++  For,
++  Match,
++  on,
++  onCleanup,
++  onMount,
++  Show,
++  Switch,
++  type Accessor,
++  type JSX,
++} from "solid-js"
+ import { animate, type AnimationPlaybackControls } from "motion"
++import stripAnsi from "strip-ansi"
+ import { useI18n } from "@opencode-ai/ui/context/i18n"
+ import { createStore } from "solid-js/store"
+ import { Collapsible } from "@opencode-ai/ui/collapsible"
+ import type { IconProps } from "@opencode-ai/ui/icon"
+ import { TextShimmer } from "@opencode-ai/ui/text-shimmer"
++import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
++import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
++import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
++import {
++  genericInputRows,
++  genericInputText,
++  inputCoveredByOutput,
++  isPlainRecord,
++  looksMarkdown,
++  parseJsonDocument,
++  prettyJsonDocument,
++  shouldStackValue,
++  type GenericInputRow,
++} from "./generic-tool-input"
++import { Markdown } from "./markdown"
+ 
+ export type TriggerTitle = {
+   title: string
+@@ -320,24 +349,225 @@ function args(input: Record<string, unknown> | undefined) {
+     .slice(0, 3)
+ }
+ 
++async function copyText(text: string): Promise<boolean> {
++  const body = typeof document === "undefined" ? undefined : document.body
++  if (body) {
++    const textarea = document.createElement("textarea")
++    textarea.value = text
++    textarea.setAttribute("readonly", "")
++    textarea.style.position = "fixed"
++    textarea.style.opacity = "0"
++    textarea.style.pointerEvents = "none"
++    body.appendChild(textarea)
++    textarea.select()
++    try {
++      if (document.execCommand("copy")) return true
++    } catch {
++    } finally {
++      body.removeChild(textarea)
++    }
++  }
++  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard
++  if (!clipboard?.writeText) return false
++  return clipboard.writeText(text).then(
++    () => true,
++    () => false,
++  )
++}
++
++function GenericValue(props: { value: string }) {
++  return (
++    <Show when={looksMarkdown(props.value)} fallback={<>{props.value}</>}>
++      <Markdown text={props.value} />
++    </Show>
++  )
++}
++
++function GenericRows(props: { rows: GenericInputRow[] }) {
++  return (
++    <dl data-slot="generic-tool-input-list">
++      <For each={props.rows}>
++        {(row) => (
++          <>
++            <div data-slot="generic-tool-input-row" data-stacked={shouldStackValue(row.value) ? "true" : undefined}>
++              <dt data-slot="generic-tool-input-key">{row.key}</dt>
++              <Show when={row.value}>
++                <dd data-slot="generic-tool-input-value">
++                  <GenericValue value={row.value} />
++                </dd>
++              </Show>
++            </div>
++            <Show when={row.subrows}>
++              <For each={row.subrows}>
++                {(sub) => (
++                  <div
++                    data-slot="generic-tool-input-row"
++                    data-nested="true"
++                    data-stacked={shouldStackValue(sub.value) ? "true" : undefined}
++                  >
++                    <dt data-slot="generic-tool-input-key">{sub.key}</dt>
++                    <dd data-slot="generic-tool-input-value">
++                      <GenericValue value={sub.value} />
++                    </dd>
++                  </div>
++                )}
++              </For>
++            </Show>
++          </>
++        )}
++      </For>
++    </dl>
++  )
++}
++
+ export function GenericTool(props: {
+   tool: string
+   status?: string
+   hideDetails?: boolean
+   input?: Record<string, unknown>
++  output?: string
++  defaultOpen?: boolean
++  open?: boolean
++  onOpenChange?: (open: boolean) => void
+ }) {
+   const i18n = useI18n()
++  const rows = createMemo(() => genericInputRows(props.input))
++  const output = createMemo(() => {
++    const value = props.output
++    if (typeof value !== "string" || !value) return ""
++    return stripAnsi(value).replace(/\r\n?/g, "\n")
++  })
++  const outputJson = createMemo(() => prettyJsonDocument(output()))
++  const outputRows = createMemo(() => {
++    const parsed = parseJsonDocument(output())
++    if (!isPlainRecord(parsed)) return []
++    return genericInputRows(parsed)
++  })
++  const hasOutputRows = () => outputRows().length > 0
++  const showInput = () => rows().length > 0 && !inputCoveredByOutput(rows(), output())
++  const hasDetails = () => showInput() || !!output()
++  const [copiedInput, setCopiedInput] = createSignal(false)
++  const [copiedOutput, setCopiedOutput] = createSignal(false)
++
++  const handleCopy = async (content: string, done: (value: boolean) => void) => {
++    if (!content) return
++    if (await copyText(content)) {
++      done(true)
++      setTimeout(() => done(false), 2000)
++    }
++  }
++
++  const trigger = () => ({
++    title: i18n.t("ui.basicTool.called", { tool: props.tool }),
++    subtitle: label(props.input),
++    args: args(props.input),
++  })
+ 
+   return (
+-    <BasicTool
+-      icon="mcp"
+-      status={props.status}
+-      trigger={{
+-        title: i18n.t("ui.basicTool.called", { tool: props.tool }),
+-        subtitle: label(props.input),
+-        args: args(props.input),
+-      }}
+-      hideDetails={props.hideDetails}
+-    />
++    <Show
++      when={hasDetails()}
++      fallback={
++        <BasicTool
++          icon="mcp"
++          status={props.status}
++          trigger={trigger()}
++          hideDetails={props.hideDetails}
++          defaultOpen={props.defaultOpen}
++          open={props.open}
++          onOpenChange={props.onOpenChange}
++          allowOpenWhilePending
++        />
++      }
++    >
++      <BasicTool
++        icon="mcp"
++        status={props.status}
++        trigger={trigger()}
++        hideDetails={props.hideDetails}
++        defaultOpen={props.defaultOpen}
++        open={props.open}
++        onOpenChange={props.onOpenChange}
++        allowOpenWhilePending
++      >
++        <div data-component="generic-tool-details">
++          <Show when={showInput()}>
++            <div data-slot="generic-tool-section" data-section="input">
++              <div data-slot="generic-copy">
++                <TooltipV2
++                  value={copiedInput() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copy")}
++                  placement="top"
++                >
++                  <IconButtonV2
++                    icon={<IconV2 name={copiedInput() ? "check" : "outline-copy"} size="small" />}
++                    size="normal"
++                    variant="ghost-muted"
++                    onMouseDown={(event) => event.preventDefault()}
++                    onClick={() => void handleCopy(genericInputText(rows()), setCopiedInput)}
++                    aria-label={copiedInput() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copy")}
++                  />
++                </TooltipV2>
++              </div>
++              <GenericRows rows={rows()} />
++            </div>
++          </Show>
++          <Show when={showInput() && !!output()}>
++            <div data-slot="generic-tool-separator" aria-hidden="true" />
++          </Show>
++          <Show when={output()}>
++            <div data-slot="generic-tool-section" data-section="output">
++              <div data-slot="generic-copy">
++                <TooltipV2
++                  value={copiedOutput() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copy")}
++                  placement="top"
++                >
++                  <IconButtonV2
++                    icon={<IconV2 name={copiedOutput() ? "check" : "outline-copy"} size="small" />}
++                    size="normal"
++                    variant="ghost-muted"
++                    onMouseDown={(event) => event.preventDefault()}
++                    onClick={() =>
++                      void handleCopy(hasOutputRows() ? genericInputText(outputRows()) : output(), setCopiedOutput)
++                    }
++                    aria-label={copiedOutput() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copy")}
++                  />
++                </TooltipV2>
++              </div>
++              <Show when={hasOutputRows()} fallback={
++                <Show
++                  when={outputJson()}
++                  fallback={
++                    <div
++                      data-slot="generic-tool-markdown"
++                      data-scrollable
++                      tabIndex={0}
++                      role="region"
++                      aria-label={i18n.t("ui.scrollView.ariaLabel")}
++                    >
++                      <Markdown text={output()} />
++                    </div>
++                  }
++                >
++                  {(json) => (
++                    <div
++                      data-slot="generic-tool-json"
++                      data-scrollable
++                      tabIndex={0}
++                      role="region"
++                      aria-label={i18n.t("ui.scrollView.ariaLabel")}
++                    >
++                      <pre data-slot="generic-tool-pre">
++                        <code>{json()}</code>
++                      </pre>
++                    </div>
++                  )}
++                </Show>
++              }>
++                <GenericRows rows={outputRows()} />
++              </Show>
++            </div>
++          </Show>
++        </div>
++      </BasicTool>
++    </Show>
+   )
+ }
+diff --git a/packages/session-ui/src/components/generic-tool-input.ts b/packages/session-ui/src/components/generic-tool-input.ts
+new file mode 100644
+index 0000000000..7060592cf4
+--- /dev/null
++++ b/packages/session-ui/src/components/generic-tool-input.ts
+@@ -0,0 +1,153 @@
++function formatScalar(value: unknown): string | undefined {
++  if (typeof value === "string") return value
++  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value)
++  if (value === null) return "null"
++  return undefined
++}
++
++export function prettyJsonDocument(value: string): string | undefined {
++  const trimmed = value.trim()
++  if (!trimmed) return undefined
++  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined
++  try {
++    return JSON.stringify(JSON.parse(trimmed), null, 2)
++  } catch {
++    return undefined
++  }
++}
++
++export function parseJsonDocument(value: string): unknown {
++  const trimmed = value.trim()
++  if (!trimmed) return undefined
++  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined
++  try {
++    return JSON.parse(trimmed)
++  } catch {
++    return undefined
++  }
++}
++
++export function isPlainRecord(value: unknown): value is Record<string, unknown> {
++  if (typeof value !== "object" || value === null || Array.isArray(value)) return false
++  const proto = Object.getPrototypeOf(value)
++  return proto === Object.prototype || proto === null
++}
++
++const MARKDOWN_STRUCTURAL = [
++  /^>\s+\S/m,
++  /^\s*[-*+]\s+\S/m,
++  /^\s*\d+[.)]\s+\S/m,
++  /```/,
++  /!\[[^\]]*\]\([^)]*\)/,
++  /\[[^\]]+\]\([^)]*\)/,
++]
++
++const MARKDOWN_INLINE = [/^#{1,6}\s+\S/m, /\*\*[^*\n]+\*\*/, /`[^`\n]+`/]
++
++const CODE_SIGNALS = [
++  /^\s*(import|from|def|class|return|print|const|let|var|function|if|elif|else|for|while|try|except|with|switch|case|do|package|func|fn|struct|impl|pub|echo|export)\b/m,
++  /[A-Za-z_$][\w$.]*\s*\(.*\)/,
++  /[{};]/,
++  /^\s*#include\b/m,
++  /=>|->|:=|===|!==|\|\||&&/,
++]
++
++export function looksCode(value: string): boolean {
++  if (!value.includes("\n")) return false
++  return CODE_SIGNALS.some((pattern) => pattern.test(value))
++}
++
++export function looksMarkdown(value: string): boolean {
++  if (MARKDOWN_STRUCTURAL.some((pattern) => pattern.test(value))) return true
++  if (looksCode(value)) return false
++  return MARKDOWN_INLINE.some((pattern) => pattern.test(value))
++}
++
++function formatValue(value: unknown): string | undefined {
++  if (typeof value === "string") return prettyJsonDocument(value) ?? value
++  const scalar = formatScalar(value)
++  if (scalar !== undefined) return scalar
++  if (Array.isArray(value)) {
++    if (value.length === 0) return ""
++    if (value.every((item) => formatScalar(item) !== undefined))
++      return value.map((item) => formatScalar(item) as string).join(", ")
++    try {
++      return JSON.stringify(value, null, 2)
++    } catch {
++      return undefined
++    }
++  }
++  if (isPlainRecord(value)) {
++    try {
++      return JSON.stringify(value, null, 2)
++    } catch {
++      return undefined
++    }
++  }
++  return undefined
++}
++
++export type GenericInputSubrow = { key: string; value: string }
++export type GenericInputRow = { key: string; value: string; subrows?: GenericInputSubrow[] }
++
++export function shouldStackValue(value: string): boolean {
++  return value.includes("\n")
++}
++
++const COVERED_VALUE_MIN_LENGTH = 100
++
++export function inputCoveredByOutput(rows: GenericInputRow[], output: string): boolean {
++  const normalize = (text: string) => text.replace(/\s+/g, " ")
++  const haystack = normalize(output)
++  if (!haystack.trim()) return false
++  const values = rows.flatMap((row) => [row.value, ...(row.subrows ?? []).map((sub) => sub.value)])
++  const substantial = values.filter((value) => value.trim().length >= COVERED_VALUE_MIN_LENGTH)
++  if (substantial.length === 0) return false
++  return substantial.every((value) => haystack.includes(normalize(value)))
++}
++
++export function genericInputText(rows: GenericInputRow[]): string {
++  return rows
++    .map((row) =>
++      row.subrows ? `${row.key}:\n${row.subrows.map((sub) => `  ${sub.key}: ${sub.value}`).join("\n")}` : `${row.key}: ${row.value}`,
++    )
++    .join("\n")
++}
++
++export function genericInputRows(input: Record<string, unknown> | undefined): GenericInputRow[] {
++  if (!input) return []
++  const rows: GenericInputRow[] = []
++  for (const [key, value] of Object.entries(input)) {
++    if (value === undefined) continue
++    if (typeof value === "function" || typeof value === "symbol") continue
++    if (isPlainRecord(value)) {
++      const entries = Object.entries(value).filter(
++        ([, nested]) => nested !== undefined && typeof nested !== "function" && typeof nested !== "symbol",
++      )
++      if (
++        entries.length > 0 &&
++        entries.every(
++          ([, nested]) =>
++            formatScalar(nested) !== undefined ||
++            (Array.isArray(nested) && nested.every((item) => formatScalar(item) !== undefined)),
++        )
++      ) {
++        rows.push({
++          key,
++          value: "",
++          subrows: entries.map(([nestedKey, nested]) => ({
++            key: nestedKey,
++            value: Array.isArray(nested)
++              ? (nested as unknown[]).map((item) => formatScalar(item) as string).join(", ")
++              : (formatScalar(nested) as string),
++          })),
++        })
++        continue
++      }
++    }
++    const formatted = formatValue(value)
++    if (formatted === undefined) continue
++    rows.push({ key, value: formatted })
++  }
++  return rows
++}
+diff --git a/packages/session-ui/src/components/generic-tool.test.ts b/packages/session-ui/src/components/generic-tool.test.ts
+new file mode 100644
+index 0000000000..ca43300cc0
+--- /dev/null
++++ b/packages/session-ui/src/components/generic-tool.test.ts
+@@ -0,0 +1,181 @@
++import { describe, expect, test } from "bun:test"
++import {
++  genericInputRows,
++  genericInputText,
++  inputCoveredByOutput,
++  isPlainRecord,
++  looksCode,
++  looksMarkdown,
++  parseJsonDocument,
++  prettyJsonDocument,
++  shouldStackValue,
++} from "./generic-tool-input"
++
++describe("genericInputRows", () => {
++  test("returns empty rows for undefined input", () => {
++    expect(genericInputRows(undefined)).toEqual([])
++  })
++
++  test("renders scalars as-is", () => {
++    expect(genericInputRows({ title: "Fix login", count: 2, active: true })).toEqual([
++      { key: "title", value: "Fix login" },
++      { key: "count", value: "2" },
++      { key: "active", value: "true" },
++    ])
++  })
++
++  test("joins primitive arrays with commas", () => {
++    expect(genericInputRows({ labels: ["bug", "auth"] })).toEqual([{ key: "labels", value: "bug, auth" }])
++  })
++
++  test("nests one level of scalar objects into subrows", () => {
++    expect(genericInputRows({ options: { depth: "advanced", retries: 3 } })).toEqual([
++      {
++        key: "options",
++        value: "",
++        subrows: [
++          { key: "depth", value: "advanced" },
++          { key: "retries", value: "3" },
++        ],
++      },
++    ])
++  })
++
++  test("skips undefined and function values", () => {
++    expect(genericInputRows({ keep: "yes", skip: undefined, fn: () => {} })).toEqual([{ key: "keep", value: "yes" }])
++  })
++
++  test("pretty-prints string values that hold JSON objects", () => {
++    expect(genericInputRows({ filter: `{"a":1,"b":[2,3]}` })).toEqual([
++      { key: "filter", value: `{\n  "a": 1,\n  "b": [\n    2,\n    3\n  ]\n}` },
++    ])
++  })
++
++  test("leaves plain strings untouched", () => {
++    expect(genericInputRows({ note: "just {text} here" })).toEqual([{ key: "note", value: "just {text} here" }])
++  })
++})
++
++describe("prettyJsonDocument", () => {
++  test("returns undefined for markdown text", () => {
++    expect(prettyJsonDocument("# Title\n\nsome **bold** text")).toBeUndefined()
++  })
++
++  test("returns undefined for empty text", () => {
++    expect(prettyJsonDocument("   ")).toBeUndefined()
++  })
++
++  test("pretty-prints JSON objects and arrays", () => {
++    expect(prettyJsonDocument(`{"a":1}`)).toBe(`{\n  "a": 1\n}`)
++    expect(prettyJsonDocument(`[1,2]`)).toBe(`[\n  1,\n  2\n]`)
++  })
++
++  test("returns undefined for malformed JSON", () => {
++    expect(prettyJsonDocument(`{"a":`)).toBeUndefined()
++  })
++})
++
++describe("looksMarkdown", () => {
++  test("detects headings, lists, fences, links, bold, and code", () => {
++    expect(looksMarkdown("# Title")).toBe(true)
++    expect(looksMarkdown("- item")).toBe(true)
++    expect(looksMarkdown("1. item")).toBe(true)
++    expect(looksMarkdown("> quote")).toBe(true)
++    expect(looksMarkdown("```js\ncode\n```")).toBe(true)
++    expect(looksMarkdown("see [docs](https://example.com)")).toBe(true)
++    expect(looksMarkdown("a **bold** move")).toBe(true)
++    expect(looksMarkdown("run `bun test`")).toBe(true)
++  })
++
++  test("leaves plain params and snake_case alone", () => {
++    expect(looksMarkdown("my_file_path")).toBe(false)
++    expect(looksMarkdown("Fix login redirect")).toBe(false)
++    expect(looksMarkdown("*.ts")).toBe(false)
++    expect(looksMarkdown("a*b")).toBe(false)
++    expect(looksMarkdown(`{"a": 1}`)).toBe(false)
++  })
++
++  test("does not treat code with # comments as markdown", () => {
++    const python = `# fetch the session\nimport json\n\ndef load(path):\n    return json.load(open(path))`
++    expect(looksCode(python)).toBe(true)
++    expect(looksMarkdown(python)).toBe(false)
++  })
++
++  test("still detects real headings without code markers", () => {
++    expect(looksMarkdown("# Release notes\n\nSome prose here")).toBe(true)
++  })
++
++  test("fenced code blocks still count as markdown", () => {
++    expect(looksMarkdown("result:\n```python\n# comment\nx = 1\n```")).toBe(true)
++  })
++})
++
++describe("parseJsonDocument + genericInputRows", () => {
++  test("formats a JSON object output like input rows", () => {
++    const parsed = parseJsonDocument(`{"title":"Fix login","labels":["bug","auth"]}`)
++    expect(isPlainRecord(parsed)).toBe(true)
++    expect(genericInputRows(parsed as Record<string, unknown>)).toEqual([
++      { key: "title", value: "Fix login" },
++      { key: "labels", value: "bug, auth" },
++    ])
++  })
++
++  test("returns undefined for markdown output", () => {
++    expect(parseJsonDocument("# Title\n\ntext")).toBeUndefined()
++  })
++})
++
++describe("shouldStackValue", () => {
++  test("stacks multi-line values under the key", () => {
++    expect(shouldStackValue("line one\nline two")).toBe(true)
++    expect(shouldStackValue(`{\n  "a": 1\n}`)).toBe(true)
++  })
++
++  test("keeps short values beside the key", () => {
++    expect(shouldStackValue("Fix login")).toBe(false)
++    expect(shouldStackValue("")).toBe(false)
++  })
++})
++
++describe("inputCoveredByOutput", () => {
++  const code = `import re, os\n\n${"x = 1\n".repeat(30)}print("done")`
++  const rows = [
++    { key: "code", value: code },
++    { key: "language", value: "python" },
++  ]
++
++  test("hides input echoed verbatim in the output", () => {
++    expect(inputCoveredByOutput(rows, `\`\`\`python\n${code}\n\`\`\`\n\ntotal segs: 10`)).toBe(true)
++  })
++
++  test("keeps input when a substantial value is missing from the output", () => {
++    expect(inputCoveredByOutput(rows, "total segs: 10")).toBe(false)
++  })
++
++  test("ignores short-only inputs", () => {
++    expect(inputCoveredByOutput([{ key: "language", value: "python" }], "```python\ncode\n```")).toBe(false)
++  })
++
++  test("matches across whitespace differences", () => {
++    expect(inputCoveredByOutput(rows, `\`\`\`python\n${code.replaceAll("\n", "  \n")}\n\`\`\``)).toBe(true)
++  })
++
++  test("returns false for empty output", () => {
++    expect(inputCoveredByOutput(rows, "   ")).toBe(false)
++  })
++})
++
++describe("genericInputText", () => {
++  test("flattens rows and subrows into readable lines", () => {
++    expect(
++      genericInputText([
++        { key: "title", value: "Fix login" },
++        {
++          key: "options",
++          value: "",
++          subrows: [{ key: "depth", value: "advanced" }],
++        },
++      ]),
++    ).toBe("title: Fix login\noptions:\n  depth: advanced")
++  })
++})
