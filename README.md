@@ -50,8 +50,9 @@ is a summary.
 | 31 | `ui-asset-compression-cache.patch` | local | embedded UI assets: gzip-eligible body (2,741,090 B → 814,864 B gz) + cache-control (hashed `assets/*` immutable, stable names no-cache) |
 | 32 | `popover-nested-overlay.patch` | local | popover dismiss: focus/pointer inside a portaled overlay opened from within the popover (e.g. plugin version menu) no longer closes the popover |
 | 33 | `generic-tool-expand.patch` | local | expandable generic (unknown/MCP/custom) tool calls: bordered card, input + JSON-object output as key/value rows (no JSON blob), other output as Markdown, separator instead of labels, per-section copy |
+| 34 | `mobile-landscape-theater.patch` | local | short-landscape theater for touch phones: hide titlebar + mobile tabs + composer (unlayered CSS), auto-fullscreen push with first-tap capture, once-per-load hint pill (apply after #29) |
 
-Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5.
+Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29.
 
 ### Patch implementers
 
@@ -60,6 +61,7 @@ Model that implemented each patch (#1–32 predate attribution — unknown):
 | Patch | Implemented by |
 |-------|---------------|
 | 33 `generic-tool-expand.patch` | Muse Spark 1.3 (Xhigh) |
+| 34 `mobile-landscape-theater.patch` | Muse Spark 1.3 (Xhigh) |
 | 1–32 | unknown |
 
 ## Patch details
@@ -149,6 +151,7 @@ because they modify disjoint regions):
 | sse-heartbeat-4s | `httpapi/handlers/{global,event}.ts` (event.ts: same file as event-session-scope / event-cold-start-directory, disjoint region) |
 | popover-nested-overlay | `ui/src/components/popover.tsx` |
 | generic-tool-expand | `session-ui/src/components/basic-tool.{tsx,css}`, new `generic-tool-input.ts` + test |
+| mobile-landscape-theater | `app/src/components/titlebar.tsx`, `app/src/pages/session.tsx`, `app/src/index.css`, `app/src/i18n/` (1 key × 62 locales) |
 
 ## Dropped patches
 
@@ -216,7 +219,7 @@ patched UI. See `AGENTS.md` for the full flag list and the
 1. Fetch the new tag into `opencode-src`; verify with `git apply --check` on a clean checkout.
 2. Run `bun install` before the first build (newer builds vendor `@opencode-ai/client`).
 3. `./patches/apply.sh` — any failure means the corresponding patch needs a rebase.
-    Rebase, then verify a fresh clone applies 33/33 and builds.
+    Rebase, then verify a fresh clone applies 34/34 and builds.
 4. Install the binary with a versioned name and back up `~/.local/share/opencode/opencode.db`.
 5. Update the version pins in `AGENTS.md`, this README, and the `apply.sh` header.
 6. Commit and push.

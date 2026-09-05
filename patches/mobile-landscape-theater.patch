@@ -1,0 +1,969 @@
+diff --git a/packages/app/src/components/titlebar.tsx b/packages/app/src/components/titlebar.tsx
+index 15d963a138..fa94242e63 100644
+--- a/packages/app/src/components/titlebar.tsx
++++ b/packages/app/src/components/titlebar.tsx
+@@ -5,6 +5,7 @@ import {
+   createSignal,
+   Match,
+   on,
++  onCleanup,
+   onMount,
+   Show,
+   Switch,
+@@ -62,6 +63,7 @@ export function useTitlebarRightMount() {
+ }
+ 
+ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visible: boolean; toggle: () => void } }) {
++  useAutoLandscapeFullscreen()
+   const layout = useLayout()
+   const platform = usePlatform()
+   const command = useCommand()
+@@ -169,7 +171,9 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
+   ])
+ 
+   return (
++    <>
+     <header
++      data-component="titlebar"
+       data-slot={useV2Titlebar() ? "titlebar-v2" : undefined}
+       classList={{
+         "shrink-0 relative flex flex-row": true,
+@@ -589,6 +593,8 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
+         </Match>
+       </Switch>
+     </header>
++    <LandscapeFsHint />
++    </>
+   )
+ }
+ 
+@@ -605,6 +611,118 @@ type TitlebarV2RightState = {
+   update: TitlebarUpdatePillState
+ }
+ 
++const shortLandscapeQuery = "(orientation: landscape) and (max-height: 500px) and (pointer: coarse)"
++
++// Theater mode: short landscape is always fullscreen with the titlebar,
++// mobile tabs, and composer hidden (see index.css). The entry attempt only
++// succeeds with a live user gesture, so a pending entry is also captured on
++// the next interaction: rotating then tapping anywhere lands in fullscreen,
++// including after a reload in landscape. Fullscreen is never exited
++// programmatically: rotating back to portrait keeps it (the CSS hiding lifts
++// on its own) and the browser's own exit affordance is the way out.
++// Automatic pushes are touch-devices only so zoomed desktop windows are left
++// alone. iPhones lack the API entirely; there the CSS hiding is the win.
++function useAutoLandscapeFullscreen() {
++  const shortLandscape = createMediaQuery(shortLandscapeQuery)
++  const coarse = createMediaQuery("(pointer: coarse)")
++  let want = false
++  const enter = () => {
++    if (typeof document === "undefined" || document.fullscreenElement) return
++    void document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {})
++  }
++  onMount(() => {
++    const onFsExit = () => {
++      // An exit while still in landscape keeps the next tap armed so
++      // landscape stays fullscreen; only leaving landscape disarms.
++      if (!document.fullscreenElement && !shortLandscape()) want = false
++    }
++    // First interaction after entering landscape carries the gesture the
++    // immediate attempt was missing. Capture phase + every gesture type so
++    // this runs no matter what the app does with the event.
++    const onInteract = () => {
++      if (want) enter()
++    }
++    const capture: AddEventListenerOptions = { capture: true, passive: true }
++    document.addEventListener("fullscreenchange", onFsExit)
++    document.addEventListener("pointerdown", onInteract, capture)
++    document.addEventListener("touchstart", onInteract, capture)
++    document.addEventListener("click", onInteract, capture)
++    document.addEventListener("keydown", onInteract, capture)
++    onCleanup(() => {
++      document.removeEventListener("fullscreenchange", onFsExit)
++      document.removeEventListener("pointerdown", onInteract, capture)
++      document.removeEventListener("touchstart", onInteract, capture)
++      document.removeEventListener("click", onInteract, capture)
++      document.removeEventListener("keydown", onInteract, capture)
++    })
++  })
++  createEffect(() => {
++    if (typeof document === "undefined") return
++    if (shortLandscape() && coarse()) {
++      want = true
++      enter()
++    } else {
++      want = false
++    }
++  })
++}
++
++// Once-per-load hint for the landscape fullscreen gesture. Visible only
++// while it can still teach something: short landscape, touch input, the API
++// present, not yet tapped, not currently fullscreen. The first landscape tap
++// or the first fullscreen entry dismisses it until the next reload; taps pass
++// through the pill so the same tap also triggers the entry.
++function useLandscapeFsHint() {
++  const shortLandscape = createMediaQuery(shortLandscapeQuery)
++  const coarse = createMediaQuery("(pointer: coarse)")
++  const [seen, setSeen] = createSignal(false)
++  const [fs, setFs] = createSignal(
++    typeof document === "undefined" ? false : !!document.fullscreenElement,
++  )
++  const api = () =>
++    typeof document !== "undefined" && typeof document.documentElement.requestFullscreen === "function"
++  onMount(() => {
++    const onFs = () => {
++      if (document.fullscreenElement) {
++        setFs(true)
++        setSeen(true)
++      } else {
++        setFs(false)
++      }
++    }
++    const onTap = () => {
++      if (shortLandscape()) setSeen(true)
++    }
++    document.addEventListener("fullscreenchange", onFs)
++    document.addEventListener("pointerdown", onTap)
++    document.addEventListener("keydown", onTap)
++    onCleanup(() => {
++      document.removeEventListener("fullscreenchange", onFs)
++      document.removeEventListener("pointerdown", onTap)
++      document.removeEventListener("keydown", onTap)
++    })
++  })
++  return {
++    visible: () => shortLandscape() && coarse() && api() && !seen() && !fs(),
++  }
++}
++
++function LandscapeFsHint() {
++  const language = useLanguage()
++  const hint = useLandscapeFsHint()
++  return (
++    <Show when={hint.visible()}>
++      <div
++        role="status"
++        class="pointer-events-none fixed bottom-[max(16px,env(safe-area-inset-bottom))] left-1/2 z-[80] flex -translate-x-1/2 items-center gap-2 rounded-full border border-v2-icon-icon-accent/40 bg-background-base px-4 py-2 text-14-medium text-text-strong shadow-lg"
++      >
++        <IconV2 name="expand" size="small" class="shrink-0 text-v2-icon-icon-accent" />
++        {language.t("titlebar.landscape.tapForFullscreen")}
++      </div>
++    </Show>
++  )
++}
++
+ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
+   return (
+     <div class="relative z-20 flex shrink-0 items-center justify-end gap-0 overflow-visible">
+diff --git a/packages/app/src/i18n/am.ts b/packages/app/src/i18n/am.ts
+index bda48350e5..1c6a65ea66 100644
+--- a/packages/app/src/i18n/am.ts
++++ b/packages/app/src/i18n/am.ts
+@@ -812,6 +812,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY የግንኙነት ቲኬት ከ{{status}}] ጋር አልተሳካም",
+   "titlebar.update": "አዘምን",
+   "titlebar.updateVersion": "አዘምን {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ትርፉን ዝጋ",
+   "common.dismiss": "አሰናብት",
+   "common.moreCountSuffix": " (+{{count}} ተጨማሪ)",
+diff --git a/packages/app/src/i18n/ar.ts b/packages/app/src/i18n/ar.ts
+index 3f55b30840..f8cfb30b1d 100644
+--- a/packages/app/src/i18n/ar.ts
++++ b/packages/app/src/i18n/ar.ts
+@@ -798,6 +798,7 @@ export const dict = {
+ 
+   "titlebar.update": "تحديث",
+   "titlebar.updateVersion": "تحديث {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "إغلاق علامة التبويب",
+   "common.dismiss": "إهمال",
+diff --git a/packages/app/src/i18n/az.ts b/packages/app/src/i18n/az.ts
+index d818ae57fd..a85e34d2c0 100644
+--- a/packages/app/src/i18n/az.ts
++++ b/packages/app/src/i18n/az.ts
+@@ -837,6 +837,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY bağlantı bileti {{status}} statusu ilə uğursuz oldu",
+   "titlebar.update": "Yenilə",
+   "titlebar.updateVersion": "Yenilə {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Tabı bağla",
+   "common.dismiss": "Bağla",
+   "common.moreCountSuffix": " (+{{count}} daha)",
+diff --git a/packages/app/src/i18n/bg.ts b/packages/app/src/i18n/bg.ts
+index 7f63d1fa4b..a3b0357aaf 100644
+--- a/packages/app/src/i18n/bg.ts
++++ b/packages/app/src/i18n/bg.ts
+@@ -834,6 +834,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY неуспешно свързване на билет с {{status}}",
+   "titlebar.update": "Актуализация",
+   "titlebar.updateVersion": "Актуализация {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Затваряне на раздела",
+   "common.dismiss": "Отхвърляне",
+   "common.moreCountSuffix": "(+{{count}} още)",
+diff --git a/packages/app/src/i18n/bn.ts b/packages/app/src/i18n/bn.ts
+index 5f0698ab64..16423bba16 100644
+--- a/packages/app/src/i18n/bn.ts
++++ b/packages/app/src/i18n/bn.ts
+@@ -827,6 +827,7 @@ export const dict: Record<string, string> = {
+   "terminal.connectTicket.statusError": "{{status}}-এর সাথে PTY সংযোগ টিকিট ব্যর্থ হয়েছে",
+   "titlebar.update": "আপডেট",
+   "titlebar.updateVersion": "{{version}} আপডেট করুন",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ট্যাব বন্ধ করুন",
+   "common.dismiss": "খারিজ",
+   "common.moreCountSuffix": "(+{{count}} আরো)",
+diff --git a/packages/app/src/i18n/br.ts b/packages/app/src/i18n/br.ts
+index 09da845ccb..8da0aaa78d 100644
+--- a/packages/app/src/i18n/br.ts
++++ b/packages/app/src/i18n/br.ts
+@@ -801,6 +801,7 @@ export const dict = {
+ 
+   "titlebar.update": "Atualizar",
+   "titlebar.updateVersion": "Atualizar {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Fechar aba",
+   "common.dismiss": "Descartar",
+diff --git a/packages/app/src/i18n/bs.ts b/packages/app/src/i18n/bs.ts
+index feb41c651a..5fe1052573 100644
+--- a/packages/app/src/i18n/bs.ts
++++ b/packages/app/src/i18n/bs.ts
+@@ -861,6 +861,7 @@ export const dict = {
+ 
+   "titlebar.update": "Ažuriraj",
+   "titlebar.updateVersion": "Ažuriraj {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Zatvori karticu",
+   "common.dismiss": "Odbaci",
+diff --git a/packages/app/src/i18n/ca.ts b/packages/app/src/i18n/ca.ts
+index 21ad325607..f4a66b9bc0 100644
+--- a/packages/app/src/i18n/ca.ts
++++ b/packages/app/src/i18n/ca.ts
+@@ -838,6 +838,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY el bitllet de connexió ha fallat amb {{status}}",
+   "titlebar.update": "Actualització",
+   "titlebar.updateVersion": "Actualització {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Tanca la pestanya",
+   "common.dismiss": "Descartar",
+   "common.moreCountSuffix": " (+{{count}} més)",
+diff --git a/packages/app/src/i18n/cs.ts b/packages/app/src/i18n/cs.ts
+index d79d4eb5a7..d5a7e82738 100644
+--- a/packages/app/src/i18n/cs.ts
++++ b/packages/app/src/i18n/cs.ts
+@@ -833,6 +833,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY lístek připojení se nezdařil s {{status}}",
+   "titlebar.update": "Aktualizovat",
+   "titlebar.updateVersion": "Aktualizovat {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Zavřít kartu",
+   "common.dismiss": "Odmítnout",
+   "common.moreCountSuffix": " (+{{count}} další)",
+diff --git a/packages/app/src/i18n/da.ts b/packages/app/src/i18n/da.ts
+index 87737b0942..c57a4098d8 100644
+--- a/packages/app/src/i18n/da.ts
++++ b/packages/app/src/i18n/da.ts
+@@ -738,6 +738,7 @@ export const dict = {
+ 
+   "titlebar.update": "Opdater",
+   "titlebar.updateVersion": "Opdater {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Luk fane",
+   "common.dismiss": "Afvis",
+diff --git a/packages/app/src/i18n/de.ts b/packages/app/src/i18n/de.ts
+index 00849598c5..4df241bc16 100644
+--- a/packages/app/src/i18n/de.ts
++++ b/packages/app/src/i18n/de.ts
+@@ -691,6 +691,7 @@ export const dict = {
+ 
+   "titlebar.update": "Aktualisieren",
+   "titlebar.updateVersion": "Aktualisieren {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Tab schließen",
+   "common.dismiss": "Verwerfen",
+diff --git a/packages/app/src/i18n/dv.ts b/packages/app/src/i18n/dv.ts
+index 27b5fea869..31661da147 100644
+--- a/packages/app/src/i18n/dv.ts
++++ b/packages/app/src/i18n/dv.ts
+@@ -841,6 +841,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY ކަނެކްޓް ޓިކެޓް {{status}} އާއެކު ފެއިލްވެއްޖެއެވެ",
+   "titlebar.update": "އަޕްޑޭޓް",
+   "titlebar.updateVersion": "{{version}} އަޕްޑޭޓް ކުރާށެވެ",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ޓެބް ބަންދުކުރުން",
+   "common.dismiss": "ދުރުކޮށްލުން",
+   "common.moreCountSuffix": " (+{{count}} އިތުރަށް)",
+diff --git a/packages/app/src/i18n/dz.ts b/packages/app/src/i18n/dz.ts
+index 3b2ad46ca3..a6dbd31aef 100644
+--- a/packages/app/src/i18n/dz.ts
++++ b/packages/app/src/i18n/dz.ts
+@@ -842,6 +842,7 @@ export const dict: Record<string, string> = {
+   "terminal.connectTicket.statusError": "PTY མཐུད་ལམ་ཤོག་བྱང་འདི་ {{status}}དང་གཅིག་ཁར་འཐུས་ཤོར་འབྱུང་ཡོདཔ།",
+   "titlebar.update": "དུས༌མཐུན༌བཟོ༌ནི",
+   "titlebar.updateVersion": "{{version}} དུས་མཐུན་བཟོ།",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "མཆོང་ལྡེ་ཁ་བསྡམས།",
+   "common.dismiss": "ཁུངས༌མེད༌བརྩི༌ནི",
+   "common.moreCountSuffix": "(+{{count}} མང་།",
+diff --git a/packages/app/src/i18n/el.ts b/packages/app/src/i18n/el.ts
+index 8f91b46af0..b4e3282903 100644
+--- a/packages/app/src/i18n/el.ts
++++ b/packages/app/src/i18n/el.ts
+@@ -837,6 +837,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY η σύνδεση εισιτηρίου απέτυχε με {{status}}",
+   "titlebar.update": "Ενημέρωση",
+   "titlebar.updateVersion": "Ενημέρωση {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Κλείσιμο καρτέλας",
+   "common.dismiss": "Παράβλεψη",
+   "common.moreCountSuffix": " (+{{count}} περισσότερα)",
+diff --git a/packages/app/src/i18n/en.ts b/packages/app/src/i18n/en.ts
+index 62d4dc1ae6..7cb428eb63 100644
+--- a/packages/app/src/i18n/en.ts
++++ b/packages/app/src/i18n/en.ts
+@@ -803,6 +807,7 @@ export const dict = {
+ 
+   "titlebar.update": "Update",
+   "titlebar.updateVersion": "Update {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Close tab",
+   "common.dismiss": "Dismiss",
+diff --git a/packages/app/src/i18n/es.ts b/packages/app/src/i18n/es.ts
+index 9e9ff2c367..1950dae254 100644
+--- a/packages/app/src/i18n/es.ts
++++ b/packages/app/src/i18n/es.ts
+@@ -866,6 +866,7 @@ export const dict = {
+ 
+   "titlebar.update": "Actualizar",
+   "titlebar.updateVersion": "Actualizar {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Cerrar pestaña",
+   "common.dismiss": "Descartar",
+diff --git a/packages/app/src/i18n/et.ts b/packages/app/src/i18n/et.ts
+index d78296675e..5ff681832b 100644
+--- a/packages/app/src/i18n/et.ts
++++ b/packages/app/src/i18n/et.ts
+@@ -824,6 +824,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY ühenduspilet ebaõnnestus kasutajaga {{status}}",
+   "titlebar.update": "Värskenda",
+   "titlebar.updateVersion": "Värskenda {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Sule vahekaart",
+   "common.dismiss": "Loobu",
+   "common.moreCountSuffix": " (+{{count}} veel)",
+diff --git a/packages/app/src/i18n/fa.ts b/packages/app/src/i18n/fa.ts
+index 0d3d721b53..34ec222454 100644
+--- a/packages/app/src/i18n/fa.ts
++++ b/packages/app/src/i18n/fa.ts
+@@ -827,6 +827,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "بلیت اتصال PTY با {{status}} ناموفق بود",
+   "titlebar.update": "به روز رسانی",
+   "titlebar.updateVersion": "{{version}} را به روز کنید",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "بستن برگه",
+   "common.dismiss": "رد کردن",
+   "common.moreCountSuffix": " (+ {{count}} بیشتر)",
+diff --git a/packages/app/src/i18n/fi.ts b/packages/app/src/i18n/fi.ts
+index aa9c92574c..fda8ed5b53 100644
+--- a/packages/app/src/i18n/fi.ts
++++ b/packages/app/src/i18n/fi.ts
+@@ -727,6 +727,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY-yhteyslippu epäonnistui tilakoodilla {{status}}",
+   "titlebar.update": "Päivitä",
+   "titlebar.updateVersion": "Päivitä {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Sulje välilehti",
+   "common.dismiss": "Hylkää",
+   "common.moreCountSuffix": " (+{{count}} muuta)",
+diff --git a/packages/app/src/i18n/fo.ts b/packages/app/src/i18n/fo.ts
+index 4329a35b42..8c2aca3c44 100644
+--- a/packages/app/src/i18n/fo.ts
++++ b/packages/app/src/i18n/fo.ts
+@@ -828,6 +828,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY sambandsmiðilin miseydnaðist við {{status}}",
+   "titlebar.update": "Dagfør",
+   "titlebar.updateVersion": "Dagfør {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Lat flipan aftur",
+   "common.dismiss": "Loysa úr starvi",
+   "common.moreCountSuffix": " (+{{count}} fleiri)",
+diff --git a/packages/app/src/i18n/fr.ts b/packages/app/src/i18n/fr.ts
+index 3c89860a44..a493413c15 100644
+--- a/packages/app/src/i18n/fr.ts
++++ b/packages/app/src/i18n/fr.ts
+@@ -1196,4 +1196,5 @@ export const dict = {
+ 
+   "titlebar.update": "Mettre à jour",
+   "titlebar.updateVersion": "Mettre à jour {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ }
+diff --git a/packages/app/src/i18n/hi.ts b/packages/app/src/i18n/hi.ts
+index 0aaf8e14dc..57742b6399 100644
+--- a/packages/app/src/i18n/hi.ts
++++ b/packages/app/src/i18n/hi.ts
+@@ -838,6 +838,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY कनेक्ट टिकट विफल रहा (स्थिति: {{status}})",
+   "titlebar.update": "अपडेट करें",
+   "titlebar.updateVersion": "अपडेट करें {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "टैब बंद करें",
+   "common.dismiss": "हटाएँ",
+   "common.moreCountSuffix": " (+{{count}} और)",
+diff --git a/packages/app/src/i18n/hr.ts b/packages/app/src/i18n/hr.ts
+index 2130c88ada..c8972fc69d 100644
+--- a/packages/app/src/i18n/hr.ts
++++ b/packages/app/src/i18n/hr.ts
+@@ -837,6 +837,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY povezivanje karte nije uspjelo sa {{status}}",
+   "titlebar.update": "Ažurirati",
+   "titlebar.updateVersion": "Ažurirajte {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Zatvori karticu",
+   "common.dismiss": "Odbaciti",
+   "common.moreCountSuffix": "(još još {{count}})",
+diff --git a/packages/app/src/i18n/hu.ts b/packages/app/src/i18n/hu.ts
+index 664abf8ee4..15096042ba 100644
+--- a/packages/app/src/i18n/hu.ts
++++ b/packages/app/src/i18n/hu.ts
+@@ -835,6 +835,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "A PTY csatlakozási jegy sikertelen a {{status}}-vel",
+   "titlebar.update": "Frissítés",
+   "titlebar.updateVersion": "Frissítse a {{version}}-t",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Lap bezárása",
+   "common.dismiss": "Elvetés",
+   "common.moreCountSuffix": "(+{{count}} további)",
+diff --git a/packages/app/src/i18n/hy.ts b/packages/app/src/i18n/hy.ts
+index 6eac43b5e6..6aee89d97e 100644
+--- a/packages/app/src/i18n/hy.ts
++++ b/packages/app/src/i18n/hy.ts
+@@ -834,6 +834,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY միացման տոմսը ձախողվեց {{status}}",
+   "titlebar.update": "Թարմացնել",
+   "titlebar.updateVersion": "Թարմացնել {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Փակել ներդիրը",
+   "common.dismiss": "Փակել",
+   "common.moreCountSuffix": " (+{{count}} ավելին)",
+diff --git a/packages/app/src/i18n/id.ts b/packages/app/src/i18n/id.ts
+index 96dc3c7592..0ecda87d41 100644
+--- a/packages/app/src/i18n/id.ts
++++ b/packages/app/src/i18n/id.ts
+@@ -901,6 +901,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Tiket koneksi PTY gagal dengan status {{status}}",
+   "titlebar.update": "Perbarui",
+   "titlebar.updateVersion": "Perbarui {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Tutup tab",
+   "common.dismiss": "Tutup",
+diff --git a/packages/app/src/i18n/is.ts b/packages/app/src/i18n/is.ts
+index a45ed9a40c..9317e3a01b 100644
+--- a/packages/app/src/i18n/is.ts
++++ b/packages/app/src/i18n/is.ts
+@@ -831,6 +831,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY tengimiði mistókst með {{status}}",
+   "titlebar.update": "Uppfærsla",
+   "titlebar.updateVersion": "Uppfærðu {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Loka flipa",
+   "common.dismiss": "Segja frá",
+   "common.moreCountSuffix": "(+{{count}} meira)",
+diff --git a/packages/app/src/i18n/it.ts b/packages/app/src/i18n/it.ts
+index a093e11485..29d45267d1 100644
+--- a/packages/app/src/i18n/it.ts
++++ b/packages/app/src/i18n/it.ts
+@@ -748,6 +748,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Il ticket di connessione PTY non è riuscito con lo stato {{status}}",
+   "titlebar.update": "Aggiorna",
+   "titlebar.updateVersion": "Aggiorna {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Chiudi scheda",
+   "common.dismiss": "Ignora",
+   "common.moreCountSuffix": " (+ altri {{count}})",
+diff --git a/packages/app/src/i18n/ja.ts b/packages/app/src/i18n/ja.ts
+index b96e8b544b..2e9d7c46b3 100644
+--- a/packages/app/src/i18n/ja.ts
++++ b/packages/app/src/i18n/ja.ts
+@@ -1166,4 +1166,5 @@ export const dict = {
+ 
+   "titlebar.update": "アップデート",
+   "titlebar.updateVersion": "アップデート {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ }
+diff --git a/packages/app/src/i18n/ka.ts b/packages/app/src/i18n/ka.ts
+index be052930a2..798f5d8875 100644
+--- a/packages/app/src/i18n/ka.ts
++++ b/packages/app/src/i18n/ka.ts
+@@ -827,6 +827,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY დაკავშირების ბილეთი ვერ მოხერხდა {{status}}",
+   "titlebar.update": "განახლება",
+   "titlebar.updateVersion": "განახლება {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ჩანართის დახურვა",
+   "common.dismiss": "დატოვება",
+   "common.moreCountSuffix": " (+{{count}} მეტი)",
+diff --git a/packages/app/src/i18n/km.ts b/packages/app/src/i18n/km.ts
+index 7f1b61fe36..1d0507f638 100644
+--- a/packages/app/src/i18n/km.ts
++++ b/packages/app/src/i18n/km.ts
+@@ -825,6 +825,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "សំបុត្រភ្ជាប់ PTY បានបរាជ័យជាមួយ {{status}}",
+   "titlebar.update": "អាប់ដេត",
+   "titlebar.updateVersion": "ធ្វើបច្ចុប្បន្នភាព {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "បិទផ្ទាំង",
+   "common.dismiss": "ច្រានចោល",
+   "common.moreCountSuffix": "(+{{count}} ច្រើនទៀត)",
+diff --git a/packages/app/src/i18n/ko.ts b/packages/app/src/i18n/ko.ts
+index b96fb4c594..503f0d7c7e 100644
+--- a/packages/app/src/i18n/ko.ts
++++ b/packages/app/src/i18n/ko.ts
+@@ -890,6 +890,7 @@ export const dict = {
+ 
+   "titlebar.update": "업데이트",
+   "titlebar.updateVersion": "업데이트 {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "command.project.previous": "이전 프로젝트",
+   "command.project.next": "다음 프로젝트",
+diff --git a/packages/app/src/i18n/lo.ts b/packages/app/src/i18n/lo.ts
+index acdc26df08..172ac9f7c9 100644
+--- a/packages/app/src/i18n/lo.ts
++++ b/packages/app/src/i18n/lo.ts
+@@ -823,6 +823,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "ປີ້ເຊື່ອມຕໍ່ PTY ລົ້ມເຫລວກັບ {{status}}",
+   "titlebar.update": "ອັບເດດ",
+   "titlebar.updateVersion": "ອັບເດດ {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ປິດແຖບ",
+   "common.dismiss": "ປິດ",
+   "common.moreCountSuffix": "(+{{count}} ເພີ່ມເຕີມ)",
+diff --git a/packages/app/src/i18n/lt.ts b/packages/app/src/i18n/lt.ts
+index ba161eb318..206084c5d2 100644
+--- a/packages/app/src/i18n/lt.ts
++++ b/packages/app/src/i18n/lt.ts
+@@ -841,6 +841,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY prisijungimo bilietas nepavyko naudojant {{status}}",
+   "titlebar.update": "Atnaujinti",
+   "titlebar.updateVersion": "Atnaujinkite {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Uždaryti skirtuką",
+   "common.dismiss": "Atsisakyti",
+   "common.moreCountSuffix": "(+{{count}} daugiau)",
+diff --git a/packages/app/src/i18n/lv.ts b/packages/app/src/i18n/lv.ts
+index df4c5b2dcd..4bfa358de1 100644
+--- a/packages/app/src/i18n/lv.ts
++++ b/packages/app/src/i18n/lv.ts
+@@ -833,6 +833,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY savienojuma biļete neizdevās ar statusu {{status}}",
+   "titlebar.update": "Atjaunināt",
+   "titlebar.updateVersion": "Atjaunināt uz {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Aizvērt cilni",
+   "common.dismiss": "Aizvērt",
+   "common.moreCountSuffix": " (+{{count}} vēl)",
+diff --git a/packages/app/src/i18n/mk.ts b/packages/app/src/i18n/mk.ts
+index 01e60baa40..f9c7c79354 100644
+--- a/packages/app/src/i18n/mk.ts
++++ b/packages/app/src/i18n/mk.ts
+@@ -832,6 +832,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY билетот за поврзување не успеа со {{status}}",
+   "titlebar.update": "Ажурирање",
+   "titlebar.updateVersion": "Ажурирај {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Затвори ја картичката",
+   "common.dismiss": "Отфрли",
+   "common.moreCountSuffix": "(+{{count}} повеќе)",
+diff --git a/packages/app/src/i18n/mn.ts b/packages/app/src/i18n/mn.ts
+index 41c4fa085d..ed69c5a67c 100644
+--- a/packages/app/src/i18n/mn.ts
++++ b/packages/app/src/i18n/mn.ts
+@@ -835,6 +835,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "{{status}}-тэй PTY холбогдох тасалбар амжилтгүй боллоо",
+   "titlebar.update": "Шинэчлэх",
+   "titlebar.updateVersion": "Шинэчлэх {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Табыг хаах",
+   "common.dismiss": "Хаах",
+   "common.moreCountSuffix": "(+{{count}} илүү)",
+diff --git a/packages/app/src/i18n/ms.ts b/packages/app/src/i18n/ms.ts
+index 2c3783d43b..e438dfb570 100644
+--- a/packages/app/src/i18n/ms.ts
++++ b/packages/app/src/i18n/ms.ts
+@@ -827,6 +827,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Tiket sambungan PTY gagal dengan {{status}}",
+   "titlebar.update": "Kemas kini",
+   "titlebar.updateVersion": "Kemas kini {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Tutup tab",
+   "common.dismiss": "Abaikan",
+   "common.moreCountSuffix": " (+{{count}} lagi)",
+diff --git a/packages/app/src/i18n/my.ts b/packages/app/src/i18n/my.ts
+index 6046f337ff..1c5ecb3e48 100644
+--- a/packages/app/src/i18n/my.ts
++++ b/packages/app/src/i18n/my.ts
+@@ -837,6 +837,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY ချိတ်ဆက်မှုလက်မှတ် {{status}} ဖြင့် မအောင်မြင်ပါ။",
+   "titlebar.update": "အပ်ဒိတ်",
+   "titlebar.updateVersion": "{{version}} ကို အပ်ဒိတ်လုပ်ပါ။",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "တဘ်ကို ပိတ်ပါ။",
+   "common.dismiss": "ပယ်ရန်",
+   "common.moreCountSuffix": "(+{{count}} နောက်ထပ်)",
+diff --git a/packages/app/src/i18n/ne.ts b/packages/app/src/i18n/ne.ts
+index cc60bff9f4..a5f0d389f7 100644
+--- a/packages/app/src/i18n/ne.ts
++++ b/packages/app/src/i18n/ne.ts
+@@ -829,6 +829,7 @@ export const dict: Record<string, string> = {
+   "terminal.connectTicket.statusError": "PTY जडान टिकट {{status}} सँग असफल भयो",
+   "titlebar.update": "अपडेट गर्नुहोस्",
+   "titlebar.updateVersion": "अपडेट गर्नुहोस् {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ट्याब बन्द गर्नुहोस्",
+   "common.dismiss": "खारेज गर्नुहोस्",
+   "common.moreCountSuffix": "(+{{count}} थप)",
+diff --git a/packages/app/src/i18n/nl.ts b/packages/app/src/i18n/nl.ts
+index 6fb1dc09f2..3e722ddeff 100644
+--- a/packages/app/src/i18n/nl.ts
++++ b/packages/app/src/i18n/nl.ts
+@@ -837,6 +837,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY-verbindingsticket mislukt met status {{status}}",
+   "titlebar.update": "Bijwerken",
+   "titlebar.updateVersion": "Bijwerken {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Tabblad sluiten",
+   "common.dismiss": "Negeren",
+   "common.moreCountSuffix": " (+{{count}} meer)",
+diff --git a/packages/app/src/i18n/no.ts b/packages/app/src/i18n/no.ts
+index 11958029dc..883ea53d77 100644
+--- a/packages/app/src/i18n/no.ts
++++ b/packages/app/src/i18n/no.ts
+@@ -726,6 +726,7 @@ export const dict = {
+ 
+   "titlebar.update": "Oppdater",
+   "titlebar.updateVersion": "Oppdater {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Lukk fane",
+   "common.dismiss": "Avvis",
+diff --git a/packages/app/src/i18n/pa.ts b/packages/app/src/i18n/pa.ts
+index 6298581c0a..bd93f24494 100644
+--- a/packages/app/src/i18n/pa.ts
++++ b/packages/app/src/i18n/pa.ts
+@@ -836,6 +836,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY کنکشن ٹکٹ {{status}} سٹیٹس نال ناکام ہو گیا",
+   "titlebar.update": "اپ ڈیٹ کرو",
+   "titlebar.updateVersion": "اپ ڈیٹ کرو {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ٹیب بند کرو",
+   "common.dismiss": "برخاست کرو",
+   "common.moreCountSuffix": " (+{{count}} ہور)",
+diff --git a/packages/app/src/i18n/pl.ts b/packages/app/src/i18n/pl.ts
+index 9b3c927498..f468ebca41 100644
+--- a/packages/app/src/i18n/pl.ts
++++ b/packages/app/src/i18n/pl.ts
+@@ -803,6 +803,7 @@ export const dict = {
+ 
+   "titlebar.update": "Aktualizuj",
+   "titlebar.updateVersion": "Aktualizuj {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Zamknij kartę",
+   "common.dismiss": "Odrzuć",
+   "common.requestFailed": "Żądanie nie powiodło się",
+diff --git a/packages/app/src/i18n/ro.ts b/packages/app/src/i18n/ro.ts
+index c84f9a4ee7..d10dc7584a 100644
+--- a/packages/app/src/i18n/ro.ts
++++ b/packages/app/src/i18n/ro.ts
+@@ -833,6 +833,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Biletul de conectare PTY a eșuat cu {{status}}",
+   "titlebar.update": "Actualizează",
+   "titlebar.updateVersion": "Actualizează la {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Închide fila",
+   "common.dismiss": "Închide",
+   "common.moreCountSuffix": " (+{{count}} în plus)",
+diff --git a/packages/app/src/i18n/ru.ts b/packages/app/src/i18n/ru.ts
+index cf4fa8d8f4..bb128b4c64 100644
+--- a/packages/app/src/i18n/ru.ts
++++ b/packages/app/src/i18n/ru.ts
+@@ -863,6 +863,7 @@ export const dict = {
+ 
+   "titlebar.update": "Обновить",
+   "titlebar.updateVersion": "Обновить {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Закрыть вкладку",
+   "common.dismiss": "Закрыть",
+diff --git a/packages/app/src/i18n/si.ts b/packages/app/src/i18n/si.ts
+index 00ca188b15..0a9e6b4994 100644
+--- a/packages/app/src/i18n/si.ts
++++ b/packages/app/src/i18n/si.ts
+@@ -825,6 +825,7 @@ export const dict: Record<string, string> = {
+   "terminal.connectTicket.statusError": "{{status}} සමඟ PTY සම්බන්ධක ප්‍රවේශපත්‍රය අසාර්ථක විය",
+   "titlebar.update": "යාවත්කාලීන කරන්න",
+   "titlebar.updateVersion": "{{version}} යාවත්කාලීන කරන්න",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ටැබ් එක වසන්න",
+   "common.dismiss": "අස් කරන්න",
+   "common.moreCountSuffix": "(+{{count}} තව)",
+diff --git a/packages/app/src/i18n/sk.ts b/packages/app/src/i18n/sk.ts
+index 9992e06cc4..d72ed902c5 100644
+--- a/packages/app/src/i18n/sk.ts
++++ b/packages/app/src/i18n/sk.ts
+@@ -831,6 +831,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Lístok na pripojenie PTY zlyhal so stavom {{status}}",
+   "titlebar.update": "Aktualizovať",
+   "titlebar.updateVersion": "Aktualizovať na verziu {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Zavrieť kartu",
+   "common.dismiss": "Zavrieť",
+   "common.moreCountSuffix": " (+{{count}} ďalšie)",
+diff --git a/packages/app/src/i18n/sl.ts b/packages/app/src/i18n/sl.ts
+index 3c23fcd7f7..40163bafbd 100644
+--- a/packages/app/src/i18n/sl.ts
++++ b/packages/app/src/i18n/sl.ts
+@@ -833,6 +833,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY povezovalna karta ni uspela z {{status}}",
+   "titlebar.update": "posodobitev",
+   "titlebar.updateVersion": "Posodobite {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Zapri zavihek",
+   "common.dismiss": "Odpusti",
+   "common.moreCountSuffix": " (+{{count}} več)",
+diff --git a/packages/app/src/i18n/sq.ts b/packages/app/src/i18n/sq.ts
+index ca94793ab0..97c1a274ed 100644
+--- a/packages/app/src/i18n/sq.ts
++++ b/packages/app/src/i18n/sq.ts
+@@ -831,6 +831,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Bileta e lidhjes PTY dështoi me {{status}}",
+   "titlebar.update": "Përditëso",
+   "titlebar.updateVersion": "Përditëso {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Mbyll skedën",
+   "common.dismiss": "Largoje",
+   "common.moreCountSuffix": " (+{{count}} më shumë)",
+diff --git a/packages/app/src/i18n/sr.ts b/packages/app/src/i18n/sr.ts
+index f059160087..b9231ad960 100644
+--- a/packages/app/src/i18n/sr.ts
++++ b/packages/app/src/i18n/sr.ts
+@@ -831,6 +831,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY улазница за повезивање није успела са {{status}}",
+   "titlebar.update": "ажурирање",
+   "titlebar.updateVersion": "ажурирање {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Затвори картицу",
+   "common.dismiss": "Одбаци",
+   "common.moreCountSuffix": "(+{{count}} више)",
+diff --git a/packages/app/src/i18n/sv.ts b/packages/app/src/i18n/sv.ts
+index 39b363c6b6..c8784d4185 100644
+--- a/packages/app/src/i18n/sv.ts
++++ b/packages/app/src/i18n/sv.ts
+@@ -833,6 +833,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY-anslutningsbiljetten misslyckades med status {{status}}",
+   "titlebar.update": "Uppdatera",
+   "titlebar.updateVersion": "Uppdatera {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Stäng fliken",
+   "common.dismiss": "Avfärda",
+   "common.moreCountSuffix": " (+{{count}} till)",
+diff --git a/packages/app/src/i18n/tg.ts b/packages/app/src/i18n/tg.ts
+index ffa08409f6..c451c14ea0 100644
+--- a/packages/app/src/i18n/tg.ts
++++ b/packages/app/src/i18n/tg.ts
+@@ -831,6 +831,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY чиптаи пайвастшавӣ бо {{status}} ноком шуд",
+   "titlebar.update": "Навсозӣ",
+   "titlebar.updateVersion": "Навсозӣ {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Варақаро пӯшед",
+   "common.dismiss": "Рад кардан",
+   "common.moreCountSuffix": "(+{{count}} бештар)",
+diff --git a/packages/app/src/i18n/th.ts b/packages/app/src/i18n/th.ts
+index 1a0e9db72b..57b9710727 100644
+--- a/packages/app/src/i18n/th.ts
++++ b/packages/app/src/i18n/th.ts
+@@ -848,6 +848,7 @@ export const dict = {
+ 
+   "titlebar.update": "อัปเดต",
+   "titlebar.updateVersion": "อัปเดต {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "ปิดแท็บ",
+   "common.dismiss": "ปิด",
+diff --git a/packages/app/src/i18n/tk.ts b/packages/app/src/i18n/tk.ts
+index 2b144c6a26..ad88225aac 100644
+--- a/packages/app/src/i18n/tk.ts
++++ b/packages/app/src/i18n/tk.ts
+@@ -828,6 +828,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY birikme bileti {{status}} bilen şowsuz boldy",
+   "titlebar.update": "Täzelen",
+   "titlebar.updateVersion": "{{version}} täzeläň",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Salgy ýapyň",
+   "common.dismiss": "Işden aýyrmak",
+   "common.moreCountSuffix": " (+ {{count}} has köp)",
+diff --git a/packages/app/src/i18n/tr.ts b/packages/app/src/i18n/tr.ts
+index 85623036e4..ed620673d6 100644
+--- a/packages/app/src/i18n/tr.ts
++++ b/packages/app/src/i18n/tr.ts
+@@ -866,6 +866,7 @@ export const dict = {
+ 
+   "titlebar.update": "Güncelle",
+   "titlebar.updateVersion": "Güncelle {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Sekmeyi kapat",
+   "common.dismiss": "Kapat",
+diff --git a/packages/app/src/i18n/uk.ts b/packages/app/src/i18n/uk.ts
+index 54732a87b7..e86b8b4e98 100644
+--- a/packages/app/src/i18n/uk.ts
++++ b/packages/app/src/i18n/uk.ts
+@@ -914,6 +914,7 @@ export const dict = {
+ 
+   "titlebar.update": "Оновити",
+   "titlebar.updateVersion": "Оновити {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "Закрити вкладку",
+   "common.dismiss": "Відхилити",
+diff --git a/packages/app/src/i18n/ur.ts b/packages/app/src/i18n/ur.ts
+index 2ab69e7aec..6ca8a7e402 100644
+--- a/packages/app/src/i18n/ur.ts
++++ b/packages/app/src/i18n/ur.ts
+@@ -839,6 +839,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY کنکشن ٹکٹ {{status}} اسٹیٹس کے ساتھ ناکام ہو گیا۔",
+   "titlebar.update": "اپ ڈیٹ کریں",
+   "titlebar.updateVersion": "اپ ڈیٹ کریں {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "ٹیب بند کریں۔",
+   "common.dismiss": "نظر انداز کریں",
+   "common.moreCountSuffix": " (+{{count}} مزید)",
+diff --git a/packages/app/src/i18n/uz.ts b/packages/app/src/i18n/uz.ts
+index 8cb7097fc0..321dd1cb69 100644
+--- a/packages/app/src/i18n/uz.ts
++++ b/packages/app/src/i18n/uz.ts
+@@ -834,6 +834,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "PTY ulanish chiptasi {{status}} bilan amalga oshmadi",
+   "titlebar.update": "Yangilash",
+   "titlebar.updateVersion": "{{version}}-ni yangilang",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Tabni yoping",
+   "common.dismiss": "Rad etish",
+   "common.moreCountSuffix": " (+{{count}} ko'proq)",
+diff --git a/packages/app/src/i18n/vi.ts b/packages/app/src/i18n/vi.ts
+index 06fda4ce70..16e2296f33 100644
+--- a/packages/app/src/i18n/vi.ts
++++ b/packages/app/src/i18n/vi.ts
+@@ -839,6 +839,7 @@ export const dict = {
+   "terminal.connectTicket.statusError": "Vé kết nối PTY thất bại với trạng thái {{status}}",
+   "titlebar.update": "Cập nhật",
+   "titlebar.updateVersion": "Cập nhật {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "Đóng tab",
+   "common.dismiss": "Bỏ qua",
+   "common.moreCountSuffix": " (+{{count}} thêm)",
+diff --git a/packages/app/src/i18n/zh.ts b/packages/app/src/i18n/zh.ts
+index b0ba045347..25b9c9c63f 100644
+--- a/packages/app/src/i18n/zh.ts
++++ b/packages/app/src/i18n/zh.ts
+@@ -844,6 +844,7 @@ export const dict = {
+ 
+   "titlebar.update": "更新",
+   "titlebar.updateVersion": "更新 {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+ 
+   "common.closeTab": "关闭标签页",
+   "common.dismiss": "忽略",
+diff --git a/packages/app/src/i18n/zht.ts b/packages/app/src/i18n/zht.ts
+index 6cc3d55528..e6d9c2d2c1 100644
+--- a/packages/app/src/i18n/zht.ts
++++ b/packages/app/src/i18n/zht.ts
+@@ -842,6 +842,7 @@ export const dict = {
+ 
+   "titlebar.update": "更新",
+   "titlebar.updateVersion": "更新 {{version}}",
++  "titlebar.landscape.tapForFullscreen": "Tap for fullscreen",
+   "common.closeTab": "關閉分頁",
+   "common.dismiss": "忽略",
+   "common.requestFailed": "要求失敗",
+diff --git a/packages/app/src/index.css b/packages/app/src/index.css
+index 78a9e103a7..054d18f23f 100644
+--- a/packages/app/src/index.css
++++ b/packages/app/src/index.css
+@@ -328,3 +328,31 @@
+     }
+   }
+ }
++
++/* Short-landscape theater mode (phones held sideways: short viewport, touch
++   as the primary input).
++   UNLAYERED on purpose: these display rules must beat Tailwind's `flex`
++   utilities, which live in `@layer utilities` and would otherwise win over
++   anything in `@layer components` regardless of specificity.
++   Hides the whole titlebar, mobile session tabs, and composer dock so the
++   timeline owns the viewport. Fullscreen is pushed from titlebar.tsx and
++   exited only via the browser's own affordance.
++   The pointer guard (not a width guard) keeps zoomed desktop windows out:
++   pinch/page zoom changes CSS px but never the primary input method. */
++@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
++  [data-component="titlebar"] {
++    display: none;
++  }
++
++  #opencode-titlebar-center {
++    display: none;
++  }
++
++  [data-component="session-mobile-tabs"] {
++    display: none;
++  }
++
++  [data-component="session-prompt-dock"] {
++    display: none;
++  }
++}
+diff --git a/packages/app/src/pages/session.tsx b/packages/app/src/pages/session.tsx
+index 2e647e0f47..25ef9bb9af 100644
+--- a/packages/app/src/pages/session.tsx
++++ b/packages/app/src/pages/session.tsx
+@@ -2062,7 +2062,7 @@ export default function Page() {
+     <>
+       {sessionSync() ?? ""}
+       <Show when={!isDesktop() && !!params.id && settings.general.newLayoutDesigns() && !mobileTabsBottom()}>
+-        {mobileTabs(true)}
++        <div data-component="session-mobile-tabs">{mobileTabs(true)}</div>
+       </Show>
+       <div class="flex-1 min-h-0 overflow-hidden">
+         <Switch>
+@@ -2242,7 +2242,9 @@ export default function Page() {
+           )
+         }}
+       </Show>
+-      <Show when={!!params.id && mobileTabsBottom()}>{mobileTabs(true, true)}</Show>
++      <Show when={!!params.id && mobileTabsBottom()}>
++        <div data-component="session-mobile-tabs">{mobileTabs(true, true)}</div>
++      </Show>
+     </>
+   )
+ 
+@@ -2256,7 +2258,9 @@ export default function Page() {
+           "gap-2 p-2": settings.general.newLayoutDesigns(),
+         }}
+       >
+-        <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>{mobileTabs()}</Show>
++        <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>
++          <div data-component="session-mobile-tabs">{mobileTabs()}</div>
++        </Show>
+ 
+         <div
+           classList={{

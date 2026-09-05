@@ -11,7 +11,8 @@
 # user-requested exclusions; + sse-heartbeat-4s added 2026-08-27,
 # + ui-asset-compression-cache added 2026-08-28,
 # + popover-nested-overlay added 2026-08-29,
-# + generic-tool-expand added 2026-09-04 (33 total)):
+# + generic-tool-expand added 2026-09-04,
+# + mobile-landscape-theater added 2026-09-05 (34 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -148,8 +149,27 @@
 #       Implementer: Muse Spark 1.3 (Xhigh).
 #       Order-independent (no other patch touches basic-tool.* / generic-tool-*)
 #
+#   34. mobile-landscape-theater.patch (local) - short-landscape theater mode
+#       for touch phones: `(orientation: landscape) and (max-height: 500px)
+#       and (pointer: coarse)` hides the whole titlebar, mobile session tabs,
+#       and composer dock. The CSS is deliberately UNLAYERED: Tailwind's
+#       `flex` utilities live in `@layer utilities` and beat any
+#       `@layer components` display rule regardless of specificity (verified
+#       live: layered version left the titlebar up). Entering landscape pushes
+#       fullscreen (immediate attempt + capture-phase first-tap capture on
+#       pointerdown/touchstart/click/keydown; never exits programmatically --
+#       portrait keeps fullscreen, CSS hiding lifts on its own). Once-per-load
+#       "Tap for fullscreen" hint pill (1 i18n key, interim English in all 61
+#       locales pending the translation pipeline). Pointer (not width) guard
+#       keeps zoomed desktop windows out: zoom remaps CSS px but never the
+#       primary input. Verified headless with CDP touch emulation: hide on
+#       entry, trusted tap -> fullscreenElement true, system-style exit ->
+#       re-tap -> fullscreen, portrait->landscape cycle, portrait control.
+#       Implementer: Muse Spark 1.3 (Xhigh).
+#       MUST apply after #29 (shared packages/app/src/i18n/en.ts).
+#
 # IMPLEMENTERS (model that wrote each patch; #1-32 predate attribution):
-#   #33 Muse Spark 1.3 (Xhigh); all others unknown.
+#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); all others unknown.
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -166,7 +186,7 @@
 #   - eager-input-streaming.patch: upstream-merged (PRs #23223, #24573, #24642)
 #   - prefill-fix.patch: upstream-merged (commit 69910f361, PR #29640)
 #   - caching.patch: dropped by upstream (opencode-cached PR #5422)
-#   Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5.
+#   Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29.
 
 set -euo pipefail
 
@@ -213,6 +233,7 @@ PATCH_NAMES=(
   ui-asset-compression-cache
   popover-nested-overlay
   generic-tool-expand
+  mobile-landscape-theater
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then
