@@ -165,10 +165,10 @@
 #       primary input. Verified headless with CDP touch emulation: hide on
 #       entry, trusted tap -> fullscreenElement true, system-style exit ->
 #       re-tap -> fullscreen, portrait->landscape cycle, portrait control.
-#       Also hides the review/terminal side column: landscape phones report
-#       desktop widths (>=768px), so the side panel splits the screen while
-#       its toggles hide with the titlebar and can't close it (state is kept,
-#       portrait restores it).
+#       The side panel stays usable in theater: the Context button
+#       (timeline header) toggles the whole panel, so a review panel stuck
+#       open with its titlebar toggle hidden is closable; tap again for
+#       context.
 #       Implementer: Muse Spark 1.3 (Xhigh).
 #       MUST apply after #29 (shared packages/app/src/i18n/en.ts).
 #
