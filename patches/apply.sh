@@ -13,7 +13,8 @@
 # + popover-nested-overlay added 2026-08-29,
 # + generic-tool-expand added 2026-09-04,
 # + mobile-landscape-theater added 2026-09-05,
-# + heic-images added 2026-09-11 (35 total)):
+# + heic-images added 2026-09-11,
+# + heic-images-v2 added 2026-09-11 (36 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -255,8 +256,8 @@ PATCH_NAMES=(
   generic-tool-expand
   mobile-landscape-theater
   heic-images
+  heic-images-v2
 )
-
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
   exit 1
