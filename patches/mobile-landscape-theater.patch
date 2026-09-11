@@ -897,10 +897,10 @@ index 6cc3d55528..e6d9c2d2c1 100644
    "common.dismiss": "忽略",
    "common.requestFailed": "要求失敗",
 diff --git a/packages/app/src/index.css b/packages/app/src/index.css
-index 78a9e103a7..054d18f23f 100644
+index 78a9e103a7..2650073999 100644
 --- a/packages/app/src/index.css
 +++ b/packages/app/src/index.css
-@@ -328,3 +328,31 @@
+@@ -328,3 +328,42 @@
      }
    }
  }
@@ -931,9 +931,20 @@ index 78a9e103a7..054d18f23f 100644
 +  [data-component="session-prompt-dock"] {
 +    display: none;
 +  }
++
++  /* Landscape phones report desktop widths (>=768px), so the review/terminal
++     side column splits the screen while its toggles hide with the titlebar
++     and can't close it. Hide the whole column in theater (state is kept, so
++     portrait restores it); the aside ids cover the legacy layout where the
++     panels render outside the column. */
++  [data-component="session-side-column"],
++  #review-panel,
++  #terminal-panel {
++    display: none;
++  }
 +}
 diff --git a/packages/app/src/pages/session.tsx b/packages/app/src/pages/session.tsx
-index 2e647e0f47..25ef9bb9af 100644
+index 2e647e0f47..1f537868fc 100644
 --- a/packages/app/src/pages/session.tsx
 +++ b/packages/app/src/pages/session.tsx
 @@ -2062,7 +2062,7 @@ export default function Page() {
@@ -967,3 +978,12 @@ index 2e647e0f47..25ef9bb9af 100644
  
          <div
            classList={{
+@@ -2321,7 +2325,7 @@ export default function Page() {
+         </Show>
+         <Show when={newSessionDesign()}>
+           <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
+-            <div class="min-w-0 h-full flex flex-1 flex-col">
++            <div data-component="session-side-column" class="min-w-0 h-full flex flex-1 flex-col">
+               <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
+                 <div class="min-h-0 flex-1">
+                   <Suspense>
