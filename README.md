@@ -51,10 +51,7 @@ is a summary.
 | 32 | `popover-nested-overlay.patch` | local | popover dismiss: focus/pointer inside a portaled overlay opened from within the popover (e.g. plugin version menu) no longer closes the popover |
 | 33 | `generic-tool-expand.patch` | local | expandable generic (unknown/MCP/custom) tool calls: bordered card, input + JSON-object output as key/value rows (no JSON blob), other output as Markdown, separator instead of labels, per-section copy |
 | 34 | `mobile-landscape-theater.patch` | local | short-landscape theater for touch phones: hide titlebar + mobile tabs + composer (unlayered CSS), auto-fullscreen push with first-tap capture, once-per-load hint pill; Context button toggles the side panel so stuck review is closable (apply after #29) |
-| 35 | `heic-images.patch` | local | phone HEIC photo attach (web UI): whitelist heic/heif (+sequence Live Photo variants) + convert HEIC → JPEG at attach via lazy heic2any (WASM, browser-only); undecodable files fall back to the unsupported toast |
-| 36 | `heic-images-v2.patch` | local | same HEIC → JPEG support for the v2 (new-layout) composer, whose duplicated attach pipeline #35 missed (root cause of the still-failing attach); mirrors #35 in session-ui (apply after #35, shared bun.lock) |
-| 37 | `heic-images-csp.patch` | local | CSP `worker-src 'self' blob:` for the HEIC converter (heic2any decodes in a blob-URL worker blocked by script-src fallback; the true root cause of the still-failing attach) (apply after #31, same file) |
-| 38 | `heic-converting-toast.patch` | local | progress toast for HEIC conversion ("Converting HEIC photo to JPEG…", dismissed on completion) in both composers; 1 i18n key × 62 locales (apply after #35+#36) |
+| 35 | `heic-support.patch` | local | phone HEIC photo attach end-to-end (unified from heic-images + heic-images-v2 + heic-images-csp + heic-converting-toast): whitelist heic/heif in v1 + v2 attach pipelines, HEIC → JPEG via lazy heic2any (WASM, capped at 2000px, resilient export resolution), CSP worker-src + unsafe-eval for its blob worker, persistent converting toast; hardcoded English copy per i18n waiver (apply after #31) |
 
 Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29.
 
@@ -66,10 +63,7 @@ Model that implemented each patch (#1–32 predate attribution — unknown):
 |-------|---------------|
 | 33 `generic-tool-expand.patch` | Muse Spark 1.3 (Xhigh) |
 | 34 `mobile-landscape-theater.patch` | Muse Spark 1.3 (Xhigh) |
-| 35 `heic-images.patch` | Muse Spark |
-| 36 `heic-images-v2.patch` | Muse Spark |
-| 37 `heic-images-csp.patch` | Muse Spark |
-| 38 `heic-converting-toast.patch` | Muse Spark |
+| 35 `heic-support.patch` | Muse Spark |
 | 1–32 | unknown |
 
 ## Patch details
@@ -160,10 +154,7 @@ because they modify disjoint regions):
 | popover-nested-overlay | `ui/src/components/popover.tsx` |
 | generic-tool-expand | `session-ui/src/components/basic-tool.{tsx,css}`, new `generic-tool-input.ts` + test |
 | mobile-landscape-theater | `app/src/components/titlebar.tsx`, `app/src/pages/session.tsx`, `app/src/components/session-context-usage.tsx`, `app/src/index.css`, `app/src/i18n/` (1 key × 62 locales) |
-| heic-images | app-only (`constants/file-picker.ts`, `prompt-input/{files,attachments}.ts` + tests, dep `heic2any`); no other patch touches these |
-| heic-images-v2 | session-ui-only (`v2/.../prompt-input/{attachments.ts,index.tsx}` + tests, dep `heic2any`); shares bun.lock with #35 (disjoint hunks, apply after #35) |
-| heic-images-csp | `opencode/src/server/shared/ui.ts` csp() + 1 test assertion (same file as #31, disjoint hunks, apply after #31) |
-| heic-converting-toast | both attach cores + composers + i18n key × 62 (same regions as #35+#36, apply after them) |
+| heic-support | HEIC-only regions across app + session-ui + opencode server (ui.ts csp shared with #31, disjoint; single bun.lock heic2any dep) |
 
 ## Dropped patches
 

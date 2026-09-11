@@ -1,0 +1,1112 @@
+diff --git a/bun.lock b/bun.lock
+index d73961bfd1..a52652b948 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -67,6 +67,7 @@
+         "effect": "catalog:",
+         "fuzzysort": "catalog:",
+         "ghostty-web": "github:anomalyco/ghostty-web#83c0a07b8628b748aed073b232cb4b52a6ca11c1",
++        "heic2any": "0.0.4",
+         "luxon": "catalog:",
+         "marked": "catalog:",
+         "marked-shiki": "catalog:",
+@@ -814,6 +815,7 @@
+         "diff": "catalog:",
+         "dompurify": "3.3.1",
+         "fuzzysort": "catalog:",
++        "heic2any": "0.0.4",
+         "luxon": "catalog:",
+         "marked": "catalog:",
+         "morphdom": "2.7.8",
+@@ -3949,6 +3951,8 @@
+ 
+     "heap-snapshot-toolkit": ["heap-snapshot-toolkit@1.1.3", "", {}, "sha512-joThu2rEsDu8/l4arupRDI1qP4CZXNG+J6Wr348vnbLGSiBkwRdqZ6aOHl5BzEiC+Dc8OTbMlmWjD0lbXD5K2Q=="],
+ 
++    "heic2any": ["heic2any@0.0.4", "", {}, "sha512-3lLnZiDELfabVH87htnRolZ2iehX9zwpRyGNz22GKXIu0fznlblf0/ftppXKNqS26dqFSeqfIBhAmAj/uSp0cA=="],
++
+     "hey-listen": ["hey-listen@1.0.8", "", {}, "sha512-COpmrF2NOg4TBWUJ5UVyaCU2A88wEMkUPK4hNqyCkqHbxT92BbvfjoSozkAIIm6XhicGlJHhFdullInrdhwU8Q=="],
+ 
+     "hono": ["hono@4.10.7", "", {}, "sha512-icXIITfw/07Q88nLSkB9aiUrd8rYzSweK681Kjo/TSggaGbOX4RRyxxm71v+3PC8C/j+4rlxGeoTRxQDkaJkUw=="],
+diff --git a/packages/app/package.json b/packages/app/package.json
+index 729c16e4a2..94a04f4d16 100644
+--- a/packages/app/package.json
++++ b/packages/app/package.json
+@@ -84,6 +84,7 @@
+     "effect": "catalog:",
+     "fuzzysort": "catalog:",
+     "ghostty-web": "github:anomalyco/ghostty-web#83c0a07b8628b748aed073b232cb4b52a6ca11c1",
++    "heic2any": "0.0.4",
+     "luxon": "catalog:",
+     "marked": "catalog:",
+     "marked-shiki": "catalog:",
+diff --git a/packages/session-ui/package.json b/packages/session-ui/package.json
+index 080d3db9cb..8878d944d2 100644
+--- a/packages/session-ui/package.json
++++ b/packages/session-ui/package.json
+@@ -53,6 +53,7 @@
+     "diff": "catalog:",
+     "dompurify": "3.3.1",
+     "fuzzysort": "catalog:",
++    "heic2any": "0.0.4",
+     "luxon": "catalog:",
+     "marked": "catalog:",
+     "morphdom": "2.7.8",
+diff --git a/packages/app/src/components/prompt-input/attachments.ts b/packages/app/src/components/prompt-input/attachments.ts
+index 6f3ef57c66..93ec440b6c 100644
+--- a/packages/app/src/components/prompt-input/attachments.ts
++++ b/packages/app/src/components/prompt-input/attachments.ts
+@@ -1,13 +1,13 @@
+ import { onMount } from "solid-js"
+ import { makeEventListener } from "@solid-primitives/event-listener"
+-import { showToast } from "@/utils/toast"
++import { showToast, dismissToast } from "@/utils/toast"
+ import { type ContentPart, type ImageAttachmentPart, type usePrompt } from "@/context/prompt"
+ import { useLanguage } from "@/context/language"
+ import { usePlatform } from "@/context/platform"
+ import { uuid } from "@/utils/uuid"
+ import { getCursorPosition } from "./editor-dom"
+ import { createBlobReference, type DraftStore } from "@/utils/draft-store"
+-import { attachmentMime } from "./files"
++import { attachmentMime, convertHeicToJpeg, createConvertingNotify, isHeicFile } from "./files"
+ import { normalizePaste, pasteMode } from "./paste"
+ 
+ type PromptTarget = Pick<ReturnType<ReturnType<typeof usePrompt>["capture"]>, "current" | "cursor" | "set">
+@@ -19,6 +19,7 @@ type PromptAttachmentsCoreInput = {
+   focusEditor?: () => void
+   addPart?: (part: ContentPart) => boolean
+   warn?: () => void
++  notify?: (converting: boolean) => void
+   readClipboardImage?: () => Promise<File | null>
+   getPathForFile?: (file: File) => string
+   draftStore?: DraftStore
+@@ -45,7 +46,21 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
+ 
+   const add = async (file: File, toast = true, target = capture()) => {
+     if (!target) return false
+-    const mime = await attachmentMime(file)
++    let source = file
++    if (isHeicFile(source)) {
++      input.notify?.(true)
++      try {
++        const converted = await convertHeicToJpeg(source).catch(() => undefined)
++        if (!converted) {
++          if (toast) input.warn?.()
++          return false
++        }
++        source = converted
++      } finally {
++        input.notify?.(false)
++      }
++    }
++    const mime = await attachmentMime(source)
+     if (!mime) {
+       if (toast) input.warn?.()
+       return false
+@@ -54,10 +69,10 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
+     const attachment: ImageAttachmentPart = {
+       type: "image",
+       id: uuid(),
+-      filename: file.name,
+-      sourcePath: input.getPathForFile?.(file) || undefined,
++      filename: source.name,
++      sourcePath: input.getPathForFile?.(source) || undefined,
+       mime,
+-      blob: input.draftStore ? await input.draftStore.putBlob(file) : await createBlobReference(file),
++      blob: input.draftStore ? await input.draftStore.putBlob(source) : await createBlobReference(source),
+     }
+     target.prompt.set([...target.prompt.current(), attachment], target.cursor)
+     return true
+@@ -160,6 +175,13 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
+         description: language.t("prompt.toast.pasteUnsupported.description"),
+       })
+     },
++    notify: createConvertingNotify(
++      // Persistent: conversions of big phone photos take well over a second
++      // and heic2any reports no progress, so a transient toast would vanish
++      // mid-convert with no ETA to show.
++      () => showToast({ title: "Converting HEIC photo to JPEG…", persistent: true }),
++      dismissToast,
++    ),
+   })
+ 
+   const handleGlobalDragOver = (event: DragEvent) => {
+diff --git a/packages/app/src/components/prompt-input/attachments.test.ts b/packages/app/src/components/prompt-input/attachments.test.ts
+index 104921697d..3d6980a613 100644
+--- a/packages/app/src/components/prompt-input/attachments.test.ts
++++ b/packages/app/src/components/prompt-input/attachments.test.ts
+@@ -1,5 +1,16 @@
+ import { describe, expect, test } from "bun:test"
+-import { attachmentMime, pickAttachmentFiles } from "./files"
++import { ACCEPTED_IMAGE_TYPES } from "@/constants/file-picker"
++import { createPromptAttachmentsCore } from "./attachments"
++import {
++  attachmentMime,
++  convertHeicToJpeg,
++  createConvertingNotify,
++  fitWithin,
++  isHeicFile,
++  pickAttachmentFiles,
++  resolveHeicConverter,
++  setHeicConverterForTests,
++} from "./files"
+ import { pasteMode } from "./paste"
+ 
+ describe("attachmentMime", () => {
+@@ -22,6 +33,206 @@ describe("attachmentMime", () => {
+     const file = new File([Uint8Array.of(0, 255, 1, 2)], "blob.bin", { type: "application/octet-stream" })
+     expect(await attachmentMime(file)).toBeUndefined()
+   })
++
++  test("keeps HEIC when the browser reports the mime", async () => {
++    const file = new File(["heic"], "photo.heic", { type: "image/heic" })
++    expect(await attachmentMime(file)).toBe("image/heic")
++  })
++
++  test("keeps HEIF when the browser reports the mime", async () => {
++    const file = new File(["heif"], "photo.heif", { type: "image/heif" })
++    expect(await attachmentMime(file)).toBe("image/heif")
++  })
++
++  test("falls back to HEIC for .heic files with an unknown browser mime", async () => {
++    const file = new File(["heic"], "IMG_1234.HEIC", { type: "application/octet-stream" })
++    expect(await attachmentMime(file)).toBe("image/heic")
++  })
++})
++
++describe("heic attachments", () => {
++  test("accepts heic image types in the file picker", () => {
++    expect(ACCEPTED_IMAGE_TYPES).toContain("image/heic")
++    expect(ACCEPTED_IMAGE_TYPES).toContain("image/heif")
++  })
++
++  test("detects HEIC files by mime or extension", () => {
++    expect(isHeicFile(new File(["a"], "photo.heic", { type: "image/heic" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "photo.heif", { type: "image/heif" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "IMG_1234.HEIC", { type: "" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "burst.heic", { type: "application/octet-stream" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "live.heic", { type: "image/heic-sequence" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "photo.png", { type: "image/png" }))).toBe(false)
++    expect(isHeicFile(new File(["a"], "photo.jpg", { type: "image/jpeg" }))).toBe(false)
++  })
++
++  test("converts HEIC to a JPEG file with a .jpg name", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(converted.type).toBe("image/jpeg")
++      expect(converted.name).toBe("photo.jpg")
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("uses the first frame of multi-image HEIC containers", async () => {
++    setHeicConverterForTests(async () => [
++      new Blob(["first"], { type: "image/jpeg" }),
++      new Blob(["second"], { type: "image/jpeg" }),
++    ])
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "burst.heic", { type: "image/heic" }))
++      expect(converted.type).toBe("image/jpeg")
++      expect(await converted.text()).toBe("first")
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("attaching a HEIC photo converts it before storing", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    try {
++      const seen: { filename: string; mime: string }[] = []
++      const attachments = createPromptAttachmentsCore({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: (parts) => {
++            for (const part of parts) {
++              if (part.type === "image") seen.push({ filename: part.filename, mime: part.mime })
++            }
++          },
++        }),
++        editor: () => document.createElement("div"),
++        draftStore: { putBlob: async () => ({ id: "blob", url: "blob:jpeg" }) } as never,
++        warn: () => undefined,
++      })
++      const ok = await attachments.addAttachment(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(ok).toBe(true)
++      expect(seen).toEqual([{ filename: "photo.jpg", mime: "image/jpeg" }])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("attaching an undecodable HEIC warns instead of crashing", async () => {
++    setHeicConverterForTests(async () => Promise.reject(new Error("unsupported variant")))
++    try {
++      let warned = 0
++      const attachments = createPromptAttachmentsCore({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => document.createElement("div"),
++        warn: () => {
++          warned += 1
++        },
++      })
++      const ok = await attachments.addAttachment(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(ok).toBe(false)
++      expect(warned).toBe(1)
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("notifies while a HEIC photo converts", async () => {
++    let release!: (blob: Blob) => void
++    const gate = new Promise<Blob>((resolve) => {
++      release = resolve
++    })
++    setHeicConverterForTests(() => gate)
++    try {
++      const states: boolean[] = []
++      const attachments = createPromptAttachmentsCore({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => document.createElement("div"),
++        draftStore: { putBlob: async () => ({ id: "blob", url: "blob:jpeg" }) } as never,
++        warn: () => undefined,
++        notify: (converting) => {
++          states.push(converting)
++        },
++      })
++      const pending = attachments.addAttachment(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(states).toEqual([true])
++      release(new Blob(["jpeg"], { type: "image/jpeg" }))
++      expect(await pending).toBe(true)
++      expect(states).toEqual([true, false])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("notifies around a failed HEIC conversion", async () => {
++    setHeicConverterForTests(async () => Promise.reject(new Error("unsupported variant")))
++    try {
++      const states: boolean[] = []
++      const attachments = createPromptAttachmentsCore({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => document.createElement("div"),
++        warn: () => undefined,
++        notify: (converting) => {
++          states.push(converting)
++        },
++      })
++      expect(await attachments.addAttachment(new File(["heic"], "photo.heic", { type: "image/heic" }))).toBe(false)
++      expect(states).toEqual([true, false])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("does not notify for regular images", async () => {    const states: boolean[] = []
++    const attachments = createPromptAttachmentsCore({
++      capture: () => ({
++        current: () => [],
++        cursor: () => 0,
++        set: () => undefined,
++      }),
++      editor: () => document.createElement("div"),
++      draftStore: { putBlob: async () => ({ id: "blob", url: "blob:png" }) } as never,
++      warn: () => undefined,
++      notify: (converting) => {
++        states.push(converting)
++      },
++    })
++    expect(await attachments.addAttachment(new File(["png"], "photo.png", { type: "image/png" }))).toBe(true)
++    expect(states).toEqual([])
++  })
++})
++
++describe("resolveHeicConverter", () => {  test("accepts the converter directly", () => {
++    const convert = async () => new Blob()
++    expect(resolveHeicConverter(convert)).toBe(convert)
++  })
++
++  test("unwraps a default export", () => {
++    const convert = async () => new Blob()
++    expect(resolveHeicConverter({ default: convert })).toBe(convert)
++  })
++
++  test("finds the converter in bundler-namespace shapes", () => {
++    const convert = async () => new Blob()
++    expect(resolveHeicConverter({ h: { default: convert } })).toBe(convert)
++  })
++
++  test("returns undefined when no function is present", () => {
++    expect(resolveHeicConverter({})).toBeUndefined()
++    expect(resolveHeicConverter({ h: { default: null } })).toBeUndefined()
++    expect(resolveHeicConverter(undefined)).toBeUndefined()
++  })
+ })
+ 
+ describe("pickAttachmentFiles", () => {
+@@ -106,3 +317,112 @@ describe("pasteMode", () => {
+     expect(pasteMode("x".repeat(8000))).toBe("manual")
+   })
+ })
++
++describe("fitWithin", () => {
++  test("downscales images larger than the model limit", () => {
++    expect(fitWithin(4000, 3000, 2000)).toEqual({ width: 2000, height: 1500 })
++    expect(fitWithin(1000, 4000, 2000)).toEqual({ width: 500, height: 2000 })
++  })
++
++  test("keeps smaller images unchanged", () => {
++    expect(fitWithin(1000, 800, 2000)).toEqual({ width: 1000, height: 800 })
++    expect(fitWithin(2000, 2000, 2000)).toEqual({ width: 2000, height: 2000 })
++  })
++})
++
++describe("heic downscale", () => {
++  test("downscales converted images larger than the model limit", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    const previousBitmap = (globalThis as Record<string, unknown>).createImageBitmap
++    const previousDocument = (globalThis as Record<string, unknown>).document
++    const downsized = new Blob(["small"], { type: "image/jpeg" })
++    ;(globalThis as Record<string, unknown>).createImageBitmap = async () => ({
++      width: 4000,
++      height: 3000,
++      close: () => undefined,
++    })
++    ;(globalThis as Record<string, unknown>).document = {
++      createElement: () => ({
++        width: 0,
++        height: 0,
++        getContext: () => ({ drawImage: () => undefined }),
++        toBlob: (callback: (blob: Blob | null) => void) => callback(downsized),
++      }),
++    }
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "big.heic", { type: "image/heic" }))
++      expect(converted.type).toBe("image/jpeg")
++      expect(converted.name).toBe("big.jpg")
++      expect(await converted.text()).toBe("small")
++    } finally {
++      if (previousBitmap === undefined) delete (globalThis as Record<string, unknown>).createImageBitmap
++      else (globalThis as Record<string, unknown>).createImageBitmap = previousBitmap
++      if (previousDocument === undefined) delete (globalThis as Record<string, unknown>).document
++      else (globalThis as Record<string, unknown>).document = previousDocument
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("keeps the converted image when canvas is unavailable", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(await converted.text()).toBe("jpeg")
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++})
++
++describe("createConvertingNotify", () => {
++  test("shows once and dismisses on completion", () => {
++    const shown: string[] = []
++    const dismissed: number[] = []
++    let next = 7
++    const notify = createConvertingNotify(
++      () => {
++        shown.push("x")
++        next += 1
++        return next
++      },
++      (id) => {
++        dismissed.push(id)
++      },
++    )
++    notify(true)
++    notify(false)
++    expect(shown).toEqual(["x"])
++    expect(dismissed).toEqual([8])
++  })
++
++  test("ignores stop without start", () => {
++    const dismissed: number[] = []
++    const notify = createConvertingNotify(
++      () => 7,
++      (id) => {
++        dismissed.push(id)
++      },
++    )
++    notify(false)
++    expect(dismissed).toEqual([])
++  })
++
++  test("restarts after completion", () => {
++    const dismissed: number[] = []
++    let next = 0
++    const notify = createConvertingNotify(
++      () => {
++        next += 1
++        return next
++      },
++      (id) => {
++        dismissed.push(id)
++      },
++    )
++    notify(true)
++    notify(false)
++    notify(true)
++    notify(false)
++    expect(dismissed).toEqual([1, 2])
++  })
++})
+diff --git a/packages/app/src/components/prompt-input-v2.tsx b/packages/app/src/components/prompt-input-v2.tsx
+index 481b7922cf..dcde3387af 100644
+--- a/packages/app/src/components/prompt-input-v2.tsx
++++ b/packages/app/src/components/prompt-input-v2.tsx
+@@ -25,10 +25,11 @@ import { usePlatform } from "@/context/platform"
+ import { useSDK } from "@/context/sdk"
+ import { useSync } from "@/context/sync"
+ import { createSessionTabs } from "@/pages/session/helpers"
+-import { showToast } from "@/utils/toast"
++import { showToast, dismissToast } from "@/utils/toast"
+ import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
+ import {
+   createPromptInputV2Controller,
++  createConvertingNotify,
+   createPromptInputV2State,
+   type PromptInputV2Interaction,
+ } from "@opencode-ai/session-ui/v2/prompt-input/interaction"
+@@ -372,6 +373,13 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
+           description: language.t("prompt.toast.pasteUnsupported.description"),
+         }),
+       duplicate: () => showToast({ title: language.t("prompt.toast.attachmentDuplicate.title") }),
++      notify: createConvertingNotify(
++        // Persistent: conversions of big phone photos take well over a second
++        // and heic2any reports no progress, so a transient toast would vanish
++        // mid-convert with no ETA to show.
++        () => showToast({ title: "Converting HEIC photo to JPEG…", persistent: true }),
++        dismissToast,
++      ),
+       onError: (error) =>
+         showToast({
+           variant: "error",
+diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
+index 89f38ec4a3..2653ca092a 100644
+--- a/packages/session-ui/src/v2/components/prompt-input/attachments.ts
++++ b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
+@@ -1,5 +1,6 @@
+ import { onMount } from "solid-js"
+ import { makeEventListener } from "@solid-primitives/event-listener"
++import { byteChecksum } from "@opencode-ai/core/util/encode"
+ import type { PromptInputV2Attachment, PromptInputV2Prompt } from "./types"
+ 
+ const accepted = [
+@@ -7,6 +8,10 @@ const accepted = [
+   "image/jpeg",
+   "image/gif",
+   "image/webp",
++  "image/heic",
++  "image/heif",
++  "image/heic-sequence",
++  "image/heif-sequence",
+   "application/pdf",
+   "text/*",
+   "application/json",
+@@ -75,6 +80,7 @@ export type PromptInputV2AttachmentConfig = {
+   isDialogActive: () => boolean
+   warn: () => void
+   duplicate: () => void
++  notify?: (converting: boolean) => void
+   onError: (error: unknown) => void
+   readClipboardImage?: () => Promise<File | null>
+   getPathForFile?: (file: File) => string
+@@ -98,13 +104,27 @@ export function createPromptInputV2Attachments(
+   }
+   const add = async (file: File, toast = true, target = capture(), clipboard = false) => {
+     if (!target) return false
+-    const mime = await attachmentMime(file)
++    let source = file
++    if (isHeicFile(source)) {
++      input.notify?.(true)
++      try {
++        const converted = await convertHeicToJpeg(source).catch(() => undefined)
++        if (!converted) {
++          if (toast) input.warn()
++          return false
++        }
++        source = converted
++      } finally {
++        input.notify?.(false)
++      }
++    }
++    const mime = await attachmentMime(source)
+     if (!mime) {
+       if (toast) input.warn()
+       return false
+     }
+-    const blob = input.store ? await input.store(file) : await blobReference(file)
+-    const sourcePath = input.getPathForFile?.(file) || undefined
++    const blob = input.store ? await input.store(source) : await blobReference(source)
++    const sourcePath = input.getPathForFile?.(source) || undefined
+     // Native clipboard images arrive with a fresh timestamped filename on every paste, so identical
+     // clipboard content is matched on bytes alone.
+     const duplicate = target.prompt
+@@ -115,7 +135,7 @@ export function createPromptInputV2Attachments(
+           part.blob.id === blob.id &&
+           (sourcePath
+             ? part.sourcePath === sourcePath
+-            : !part.sourcePath && (clipboard || part.filename === file.name)),
++            : !part.sourcePath && (clipboard || part.filename === source.name)),
+       )
+     if (duplicate) {
+       input.duplicate()
+@@ -124,7 +144,7 @@ export function createPromptInputV2Attachments(
+     const attachment: PromptInputV2Attachment = {
+       type: "image",
+       id: globalThis.crypto?.randomUUID?.() ?? Math.random().toString(16).slice(2),
+-      filename: file.name,
++      filename: source.name,
+       sourcePath,
+       mime,
+       blob,
+@@ -219,16 +239,28 @@ export function createPromptInputV2Attachments(
+   }
+ }
+ 
+-const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
++const imageMimes = new Set([
++  "image/png",
++  "image/jpeg",
++  "image/gif",
++  "image/webp",
++  "image/heic",
++  "image/heif",
++  "image/heic-sequence",
++  "image/heif-sequence",
++])
+ 
+ async function blobReference(file: File) {
+-  const id = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())))
+-    .map((byte) => byte.toString(16).padStart(2, "0"))
+-    .join("")
++  const bytes = new Uint8Array(await file.arrayBuffer())
++  const id = crypto.subtle
++    ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((byte) => byte.toString(16).padStart(2, "0")).join("")
++    : byteChecksum(bytes)
+   return { id, url: URL.createObjectURL(file) }
+ }
+ const imageExtensions = new Map([
+   ["gif", "image/gif"],
++  ["heic", "image/heic"],
++  ["heif", "image/heif"],
+   ["jpeg", "image/jpeg"],
+   ["jpg", "image/jpeg"],
+   ["png", "image/png"],
+@@ -244,7 +276,7 @@ const textMimes = new Set([
+   "application/yaml",
+ ])
+ 
+-async function attachmentMime(file: File) {
++export async function attachmentMime(file: File) {
+   const type = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""
+   if (imageMimes.has(type) || type === "application/pdf") return type
+   const index = file.name.lastIndexOf(".")
+@@ -261,6 +293,101 @@ async function attachmentMime(file: File) {
+   return "text/plain"
+ }
+ 
++const heicMimes = new Set(["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"])
++
++export function isHeicFile(file: File) {
++  if (heicMimes.has(file.type.split(";", 1)[0]?.trim().toLowerCase() ?? "")) return true
++  const index = file.name.lastIndexOf(".")
++  const suffix = index === -1 ? "" : file.name.slice(index + 1).toLowerCase()
++  return suffix === "heic" || suffix === "heif"
++}
++
++export type HeicConverter = (input: { blob: Blob; toType?: string; quality?: number }) => Promise<Blob | Blob[]>
++
++let heicConverter: HeicConverter | undefined
++
++export function setHeicConverterForTests(converter: HeicConverter | undefined) {
++  heicConverter = converter
++}
++
++async function defaultHeicConverter(input: { blob: Blob }) {
++  // Browser-only: heic2any touches window/Worker at import time, so this
++  // must stay a lazy import on the attach path, never a static import.
++  const mod = await import("heic2any")
++  const heic2any = resolveHeicConverter(mod)
++  if (!heic2any) throw new Error("HEIC converter unavailable")
++  return heic2any({ blob: input.blob, toType: "image/jpeg", quality: 0.92 })
++}
++
++export function resolveHeicConverter(mod: unknown, seen: Set<unknown> = new Set()): HeicConverter | undefined {
++  if (typeof mod === "function") return mod as HeicConverter
++  if (!mod || typeof mod !== "object" || seen.has(mod)) return undefined
++  seen.add(mod)
++  for (const value of Object.values(mod)) {
++    const found = resolveHeicConverter(value, seen)
++    if (found) return found
++  }
++  return undefined
++}
++
++export async function convertHeicToJpeg(file: File) {
++  const convert = heicConverter ?? defaultHeicConverter
++  const result = await convert({ blob: file })
++  const blob = Array.isArray(result) ? result[0] : result
++  if (!blob) throw new Error("HEIC conversion produced no images")
++  const resized = await downscaleIfNeeded(blob)
++  const base = file.name.includes(".") ? file.name.slice(0, file.name.lastIndexOf(".")) : file.name
++  return new File([resized], `${base || "photo"}.jpg`, { type: "image/jpeg" })
++}
++
++// Matches the server image resizer limits (opencode image.normalize
++// MAX_WIDTH/MAX_HEIGHT): the model never sees more than this, so sending
++// larger only wastes encode + upload time on big phone photos.
++const CONVERTED_MAX_SIZE = 2000
++
++export function fitWithin(width: number, height: number, max: number) {
++  if (width <= max && height <= max) return { width, height }
++  const scale = Math.min(max / width, max / height)
++  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) }
++}
++
++async function downscaleIfNeeded(blob: Blob) {
++  try {
++    if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return blob
++    const bitmap = await createImageBitmap(blob)
++    try {
++      const size = fitWithin(bitmap.width, bitmap.height, CONVERTED_MAX_SIZE)
++      if (size.width === bitmap.width && size.height === bitmap.height) return blob
++      const canvas = document.createElement("canvas")
++      canvas.width = size.width
++      canvas.height = size.height
++      const context = canvas.getContext("2d")
++      if (!context) return blob
++      context.drawImage(bitmap, 0, 0, size.width, size.height)
++      const output = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92))
++      return output ?? blob
++    } finally {
++      bitmap.close?.()
++    }
++  } catch {
++    return blob
++  }
++}
++
++export function createConvertingNotify(show: () => number, dismiss: (id: number) => void) {
++  let id: number | undefined
++  return (converting: boolean) => {
++    if (converting) {
++      id = show()
++      return
++    }
++    if (id !== undefined) {
++      dismiss(id)
++      id = undefined
++    }
++  }
++}
++
+ function cursorPosition(editor: HTMLElement) {
+   const selection = window.getSelection()
+   if (!selection || selection.rangeCount === 0) return 0
+diff --git a/packages/opencode/src/server/shared/ui.ts b/packages/opencode/src/server/shared/ui.ts
+index d3f2c45113..4f2bdc7bea 100644
+--- a/packages/opencode/src/server/shared/ui.ts
++++ b/packages/opencode/src/server/shared/ui.ts
+@@ -9,7 +9,7 @@ let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
+ export const UI_UPSTREAM = new URL("https://app.opencode.ai")
+ 
+ export const csp = (hash = "") =>
+-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
++  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
+ export const DEFAULT_CSP = csp()
+ 
+ export function themePreloadHash(body: string) {
+diff --git a/packages/opencode/test/server/httpapi-ui.test.ts b/packages/opencode/test/server/httpapi-ui.test.ts
+index 1a7ccc60da..48aee915e2 100644
+--- a/packages/opencode/test/server/httpapi-ui.test.ts
++++ b/packages/opencode/test/server/httpapi-ui.test.ts
+@@ -350,8 +350,10 @@ describe("HttpApi UI fallback", () => {
+ 
+       const csp = response.headers.get("content-security-policy") ?? ""
+       expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'")
++      expect(csp).toContain("'unsafe-eval'")
+       expect(csp).toContain(`'sha256-${createHash("sha256").update(script).digest("base64")}'`)
+       expect(csp).toContain("img-src 'self' data: https: blob:")
++      expect(csp).toContain("worker-src 'self' blob:")
+       expect(csp).toContain("connect-src * data: blob:")
+     }),
+   )
+diff --git a/packages/session-ui/src/v2/components/prompt-input/interaction.ts b/packages/session-ui/src/v2/components/prompt-input/interaction.ts
+index f4a9fa74b7..5f4ccb64d7 100644
+--- a/packages/session-ui/src/v2/components/prompt-input/interaction.ts
++++ b/packages/session-ui/src/v2/components/prompt-input/interaction.ts
+@@ -2,6 +2,8 @@ import { createEffect, on, type Accessor } from "solid-js"
+ import { createStore, reconcile } from "solid-js/store"
+ import { useFilteredList } from "@opencode-ai/ui/hooks"
+ import { createPromptInputV2Attachments, type PromptInputV2AttachmentConfig } from "./attachments"
++
++export { createConvertingNotify } from "./attachments"
+ import { createPromptInputV2Store, type PromptInputV2StoreInput } from "./store"
+ import type {
+   PromptInputV2Attachment,
+diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
+new file mode 100644
+index 0000000000..bde1f80c06
+new file mode 100644
+--- /dev/null
++++ b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
+@@ -0,0 +1,336 @@
++import { describe, expect, test } from "bun:test"
++import { createRoot } from "solid-js"
++import {
++  attachmentMime,
++  convertHeicToJpeg,
++  createConvertingNotify,
++  createPromptInputV2Attachments,
++  fitWithin,
++  isHeicFile,
++  resolveHeicConverter,
++  setHeicConverterForTests,
++} from "./attachments"
++
++describe("v2 attachmentMime", () => {
++  test("keeps HEIC when the browser reports the mime", async () => {
++    const file = new File(["heic"], "photo.heic", { type: "image/heic" })
++    expect(await attachmentMime(file)).toBe("image/heic")
++  })
++
++  test("keeps HEIF when the browser reports the mime", async () => {
++    const file = new File(["heif"], "photo.heif", { type: "image/heif" })
++    expect(await attachmentMime(file)).toBe("image/heif")
++  })
++
++  test("falls back to HEIC for .heic files with an unknown browser mime", async () => {
++    const file = new File(["heic"], "IMG_1234.HEIC", { type: "application/octet-stream" })
++    expect(await attachmentMime(file)).toBe("image/heic")
++  })
++})
++
++describe("v2 heic attachments", () => {
++  test("detects HEIC files by mime or extension", () => {
++    expect(isHeicFile(new File(["a"], "photo.heic", { type: "image/heic" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "photo.heif", { type: "image/heif" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "IMG_1234.HEIC", { type: "" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "live.heic", { type: "image/heic-sequence" }))).toBe(true)
++    expect(isHeicFile(new File(["a"], "photo.png", { type: "image/png" }))).toBe(false)
++  })
++
++  test("converts HEIC to a JPEG file with a .jpg name", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(converted.type).toBe("image/jpeg")
++      expect(converted.name).toBe("photo.jpg")
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("uses the first frame of multi-image HEIC containers", async () => {
++    setHeicConverterForTests(async () => [
++      new Blob(["first"], { type: "image/jpeg" }),
++      new Blob(["second"], { type: "image/jpeg" }),
++    ])
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "burst.heic", { type: "image/heic" }))
++      expect(await converted.text()).toBe("first")
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("attaching a HEIC photo converts it before storing", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    try {
++      const seen: { filename: string; mime: string }[] = []
++      let warned = 0
++      const ok = await createRoot(() =>
++        createPromptInputV2Attachments({
++          capture: () => ({
++            current: () => [],
++            cursor: () => 0,
++            set: (parts) => {
++              for (const part of parts) {
++                if (part.type === "image") seen.push({ filename: part.filename, mime: part.mime })
++              }
++            },
++          }),
++          editor: () => ({} as HTMLElement),
++          focusEditor: () => undefined,
++          addPart: () => false,
++          setDraggingType: () => undefined,
++          directory: () => "/tmp",
++          isDialogActive: () => false,
++          warn: () => {
++            warned += 1
++          },
++          duplicate: () => undefined,
++          onError: () => undefined,
++          store: async () => ({ id: "blob", url: "blob:jpeg" }),
++        }).addAttachments([new File(["heic"], "photo.heic", { type: "image/heic" })]),
++      )
++      expect(ok).toBe(true)
++      expect(warned).toBe(0)
++      expect(seen).toEqual([{ filename: "photo.jpg", mime: "image/jpeg" }])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("attaching an undecodable HEIC warns instead of crashing", async () => {
++    setHeicConverterForTests(async () => Promise.reject(new Error("unsupported variant")))
++    try {
++      let warned = 0
++      const ok = await createRoot(() =>
++        createPromptInputV2Attachments({
++          capture: () => ({
++            current: () => [],
++            cursor: () => 0,
++            set: () => undefined,
++          }),
++          editor: () => ({} as HTMLElement),
++          focusEditor: () => undefined,
++          addPart: () => false,
++          setDraggingType: () => undefined,
++          directory: () => "/tmp",
++          isDialogActive: () => false,
++          warn: () => {
++            warned += 1
++          },
++          duplicate: () => undefined,
++          onError: () => undefined,
++          store: async () => ({ id: "blob", url: "blob:jpeg" }),
++        }).addAttachments([new File(["heic"], "photo.heic", { type: "image/heic" })]),
++      )
++      expect(ok).toBe(false)
++      expect(warned).toBe(1)
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("notifies while a HEIC photo converts", async () => {
++    let release!: (blob: Blob) => void
++    const gate = new Promise<Blob>((resolve) => {
++      release = resolve
++    })
++    setHeicConverterForTests(() => gate)
++    try {
++      const states: boolean[] = []
++      let pending!: Promise<boolean>
++      await createRoot(async () => {
++        pending = createPromptInputV2Attachments({
++          capture: () => ({
++            current: () => [],
++            cursor: () => 0,
++            set: () => undefined,
++          }),
++          editor: () => ({} as HTMLElement),
++          focusEditor: () => undefined,
++          addPart: () => false,
++          setDraggingType: () => undefined,
++          directory: () => "/tmp",
++          isDialogActive: () => false,
++          warn: () => undefined,
++          duplicate: () => undefined,
++          onError: () => undefined,
++          store: async () => ({ id: "blob", url: "blob:jpeg" }),
++          notify: (converting) => {
++            states.push(converting)
++          },
++        }).addAttachments([new File(["heic"], "photo.heic", { type: "image/heic" })])
++        // addAttachments fans out through a sequential reduce, so the first
++        // convert starts a microtask later (unlike v1's direct add call).
++        await Promise.resolve()
++        expect(states).toEqual([true])
++        release(new Blob(["jpeg"], { type: "image/jpeg" }))
++      })
++      expect(await pending).toBe(true)
++      expect(states).toEqual([true, false])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("does not notify for regular images", async () => {
++    const states: boolean[] = []
++    const ok = await createRoot(() =>
++      createPromptInputV2Attachments({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => ({} as HTMLElement),
++        focusEditor: () => undefined,
++        addPart: () => false,
++        setDraggingType: () => undefined,
++        directory: () => "/tmp",
++        isDialogActive: () => false,
++        warn: () => undefined,
++        duplicate: () => undefined,
++        onError: () => undefined,
++        store: async () => ({ id: "blob", url: "blob:png" }),
++        notify: (converting) => {
++          states.push(converting)
++        },
++      }).addAttachments([new File(["png"], "photo.png", { type: "image/png" })]),
++    )
++    expect(ok).toBe(true)
++    expect(states).toEqual([])
++  })
++})
++
++describe("v2 resolveHeicConverter", () => {
++  test("accepts the converter directly", () => {
++    const convert = async () => new Blob()
++    expect(resolveHeicConverter(convert)).toBe(convert)
++  })
++
++  test("unwraps a default export", () => {
++    const convert = async () => new Blob()
++    expect(resolveHeicConverter({ default: convert })).toBe(convert)
++  })
++
++  test("finds the converter in bundler-namespace shapes", () => {
++    const convert = async () => new Blob()
++    expect(resolveHeicConverter({ h: { default: convert } })).toBe(convert)
++  })
++
++  test("returns undefined when no function is present", () => {
++    expect(resolveHeicConverter({})).toBeUndefined()
++    expect(resolveHeicConverter({ h: { default: null } })).toBeUndefined()
++    expect(resolveHeicConverter(undefined)).toBeUndefined()
++  })
++})
++
++describe("v2 fitWithin", () => {
++  test("downscales images larger than the model limit", () => {
++    expect(fitWithin(4000, 3000, 2000)).toEqual({ width: 2000, height: 1500 })
++    expect(fitWithin(1000, 4000, 2000)).toEqual({ width: 500, height: 2000 })
++  })
++
++  test("keeps smaller images unchanged", () => {
++    expect(fitWithin(1000, 800, 2000)).toEqual({ width: 1000, height: 800 })
++    expect(fitWithin(2000, 2000, 2000)).toEqual({ width: 2000, height: 2000 })
++  })
++})
++
++describe("v2 heic downscale", () => {
++  test("downscales converted images larger than the model limit", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    const previousBitmap = (globalThis as Record<string, unknown>).createImageBitmap
++    const previousDocument = (globalThis as Record<string, unknown>).document
++    const downsized = new Blob(["small"], { type: "image/jpeg" })
++    ;(globalThis as Record<string, unknown>).createImageBitmap = async () => ({
++      width: 4000,
++      height: 3000,
++      close: () => undefined,
++    })
++    ;(globalThis as Record<string, unknown>).document = {
++      createElement: () => ({
++        width: 0,
++        height: 0,
++        getContext: () => ({ drawImage: () => undefined }),
++        toBlob: (callback: (blob: Blob | null) => void) => callback(downsized),
++      }),
++    }
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "big.heic", { type: "image/heic" }))
++      expect(converted.type).toBe("image/jpeg")
++      expect(converted.name).toBe("big.jpg")
++      expect(await converted.text()).toBe("small")
++    } finally {
++      if (previousBitmap === undefined) delete (globalThis as Record<string, unknown>).createImageBitmap
++      else (globalThis as Record<string, unknown>).createImageBitmap = previousBitmap
++      if (previousDocument === undefined) delete (globalThis as Record<string, unknown>).document
++      else (globalThis as Record<string, unknown>).document = previousDocument
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("keeps the converted image when canvas is unavailable", async () => {
++    setHeicConverterForTests(async () => new Blob(["jpeg"], { type: "image/jpeg" }))
++    try {
++      const converted = await convertHeicToJpeg(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(await converted.text()).toBe("jpeg")
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++})
++
++describe("v2 createConvertingNotify", () => {
++  test("shows once and dismisses on completion", () => {
++    const shown: string[] = []
++    const dismissed: number[] = []
++    let next = 7
++    const notify = createConvertingNotify(
++      () => {
++        shown.push("x")
++        next += 1
++        return next
++      },
++      (id) => {
++        dismissed.push(id)
++      },
++    )
++    notify(true)
++    notify(false)
++    expect(shown).toEqual(["x"])
++    expect(dismissed).toEqual([8])
++  })
++
++  test("ignores stop without start", () => {
++    const dismissed: number[] = []
++    const notify = createConvertingNotify(
++      () => 7,
++      (id) => {
++        dismissed.push(id)
++      },
++    )
++    notify(false)
++    expect(dismissed).toEqual([])
++  })
++
++  test("restarts after completion", () => {
++    const dismissed: number[] = []
++    let next = 0
++    const notify = createConvertingNotify(
++      () => {
++        next += 1
++        return next
++      },
++      (id) => {
++        dismissed.push(id)
++      },
++    )
++    notify(true)
++    notify(false)
++    notify(true)
++    notify(false)
++    expect(dismissed).toEqual([1, 2])
++  })
++})
