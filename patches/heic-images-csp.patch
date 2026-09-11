@@ -1,0 +1,25 @@
+diff --git a/packages/opencode/src/server/shared/ui.ts b/packages/opencode/src/server/shared/ui.ts
+index d3f2c45113..54b1d1e288 100644
+--- a/packages/opencode/src/server/shared/ui.ts
++++ b/packages/opencode/src/server/shared/ui.ts
+@@ -9,7 +9,7 @@ let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
+ export const UI_UPSTREAM = new URL("https://app.opencode.ai")
+ 
+ export const csp = (hash = "") =>
+-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
++  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
+ export const DEFAULT_CSP = csp()
+ 
+ export function themePreloadHash(body: string) {
+diff --git a/packages/opencode/test/server/httpapi-ui.test.ts b/packages/opencode/test/server/httpapi-ui.test.ts
+index 1a7ccc60da..2930d69a33 100644
+--- a/packages/opencode/test/server/httpapi-ui.test.ts
++++ b/packages/opencode/test/server/httpapi-ui.test.ts
+@@ -352,6 +352,7 @@ describe("HttpApi UI fallback", () => {
+       expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'")
+       expect(csp).toContain(`'sha256-${createHash("sha256").update(script).digest("base64")}'`)
+       expect(csp).toContain("img-src 'self' data: https: blob:")
++      expect(csp).toContain("worker-src 'self' blob:")
+       expect(csp).toContain("connect-src * data: blob:")
+     }),
+   )

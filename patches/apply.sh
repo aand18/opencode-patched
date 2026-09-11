@@ -14,7 +14,8 @@
 # + generic-tool-expand added 2026-09-04,
 # + mobile-landscape-theater added 2026-09-05,
 # + heic-images added 2026-09-11,
-# + heic-images-v2 added 2026-09-11 (36 total)):
+# + heic-images-v2 added 2026-09-11,
+# + heic-images-csp added 2026-09-11 (37 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -189,8 +190,29 @@
 #       seam for tests). Implementer: Muse Spark.
 #       Order-independent (app-only files; no other patch touches them).
 #
+#   36. heic-images-v2.patch     (local) - same HEIC -> JPEG support for the v2 (new-layout)
+#       composer, which duplicates the attach pipeline and was missed by #35
+#       (cause of the still-failing phone attach at that time: v2's private
+#       imageMimes/imageExtensions/attachmentMime rejected HEIC before any
+#       conversion ran). Mirrors #35 in session-ui: whitelist + ext fallback +
+#       lazy heic2any conversion with the same injectable test seam, hardcoded
+#       file-input accept string, heic2any dep on the session-ui package.
+#       8 new unit tests (incl. add-wiring via controller). Implementer: Muse Spark.
+#       Applies after #35 (shared bun.lock, disjoint hunks); otherwise order-independent.
+#
+#   37. heic-images-csp.patch     (local) - CSP worker-src for the HEIC converter:
+#       heic2any decodes inside a blob-URL Web Worker created at import time,
+#       but the served CSP had no worker-src directive, so script-src 'self'
+#       blocked it (console: "Refused to create a worker from 'blob:...'").
+#       The import rejected -> attach fell back to the unsupported toast even
+#       with #35+#36 applied (true root cause of the still-failing phone attach).
+#       Adds `worker-src 'self' blob:` to csp() in server/shared/ui.ts (blob
+#       workers are same-origin code created by our own scripts). 1 assertion
+#       added to the existing embedded-UI CSP test. Implementer: Muse Spark.
+#       Applies after #31 (same file, disjoint hunks); otherwise order-independent.
+#
 # IMPLEMENTERS (model that wrote each patch; #1-32 predate attribution):
-#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark; all others unknown.
+#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark; #36 Muse Spark; #37 Muse Spark; all others unknown.
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -257,6 +279,7 @@ PATCH_NAMES=(
   mobile-landscape-theater
   heic-images
   heic-images-v2
+  heic-images-csp
 )
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
