@@ -12,7 +12,8 @@
 # + ui-asset-compression-cache added 2026-08-28,
 # + popover-nested-overlay added 2026-08-29,
 # + generic-tool-expand added 2026-09-04,
-# + mobile-landscape-theater added 2026-09-05 (34 total)):
+# + mobile-landscape-theater added 2026-09-05,
+# + heic-images added 2026-09-11 (35 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -172,8 +173,23 @@
 #       Implementer: Muse Spark 1.3 (Xhigh).
 #       MUST apply after #29 (shared packages/app/src/i18n/en.ts).
 #
+#   35. heic-images.patch        (local) - phone HEIC photo attach support (web UI only):
+#       whitelist image/heic|heif (+-sequence Live Photo variants) in
+#       ACCEPTED_IMAGE_TYPES/MIME_EXT (also fixes the desktop picker filter,
+#       which derives from the same constants) + IMAGE_EXTS extension fallback,
+#       and convert HEIC -> JPEG at attach time via lazily-imported heic2any
+#       (WASM libheif, browser-only, zero cost to non-HEIC users; first frame
+#       of multi-image containers; failure falls back to the existing
+#       unsupported toast). No new native deps: sharp's prebuilt libvips ships
+#       without the HEVC codec (licensing), and zero browsers decode HEIC in
+#       canvas/Bitmap APIs, so a shipped WASM decoder is mandatory. EXIF/GPS
+#       is dropped by the decoder (the model reads pixels only); orientation
+#       is baked into pixels. 9 new unit tests (converter behind an injectable
+#       seam for tests). Implementer: Muse Spark.
+#       Order-independent (app-only files; no other patch touches them).
+#
 # IMPLEMENTERS (model that wrote each patch; #1-32 predate attribution):
-#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); all others unknown.
+#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark; all others unknown.
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -238,6 +254,7 @@ PATCH_NAMES=(
   popover-nested-overlay
   generic-tool-expand
   mobile-landscape-theater
+  heic-images
 )
 
 if [ ! -d "$SOURCE_DIR" ]; then

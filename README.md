@@ -51,6 +51,7 @@ is a summary.
 | 32 | `popover-nested-overlay.patch` | local | popover dismiss: focus/pointer inside a portaled overlay opened from within the popover (e.g. plugin version menu) no longer closes the popover |
 | 33 | `generic-tool-expand.patch` | local | expandable generic (unknown/MCP/custom) tool calls: bordered card, input + JSON-object output as key/value rows (no JSON blob), other output as Markdown, separator instead of labels, per-section copy |
 | 34 | `mobile-landscape-theater.patch` | local | short-landscape theater for touch phones: hide titlebar + mobile tabs + composer (unlayered CSS), auto-fullscreen push with first-tap capture, once-per-load hint pill; Context button toggles the side panel so stuck review is closable (apply after #29) |
+| 35 | `heic-images.patch` | local | phone HEIC photo attach (web UI): whitelist heic/heif (+sequence Live Photo variants) + convert HEIC → JPEG at attach via lazy heic2any (WASM, browser-only); undecodable files fall back to the unsupported toast |
 
 Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29.
 
@@ -62,6 +63,7 @@ Model that implemented each patch (#1–32 predate attribution — unknown):
 |-------|---------------|
 | 33 `generic-tool-expand.patch` | Muse Spark 1.3 (Xhigh) |
 | 34 `mobile-landscape-theater.patch` | Muse Spark 1.3 (Xhigh) |
+| 35 `heic-images.patch` | Muse Spark |
 | 1–32 | unknown |
 
 ## Patch details
@@ -152,6 +154,7 @@ because they modify disjoint regions):
 | popover-nested-overlay | `ui/src/components/popover.tsx` |
 | generic-tool-expand | `session-ui/src/components/basic-tool.{tsx,css}`, new `generic-tool-input.ts` + test |
 | mobile-landscape-theater | `app/src/components/titlebar.tsx`, `app/src/pages/session.tsx`, `app/src/components/session-context-usage.tsx`, `app/src/index.css`, `app/src/i18n/` (1 key × 62 locales) |
+| heic-images | app-only (`constants/file-picker.ts`, `prompt-input/{files,attachments}.ts` + tests, dep `heic2any`); no other patch touches these |
 
 ## Dropped patches
 
