@@ -1,0 +1,1048 @@
+diff --git a/packages/app/src/components/prompt-input/attachments.ts b/packages/app/src/components/prompt-input/attachments.ts
+index 2335992e00..38ca3c6a60 100644
+--- a/packages/app/src/components/prompt-input/attachments.ts
++++ b/packages/app/src/components/prompt-input/attachments.ts
+@@ -1,6 +1,6 @@
+ import { onMount } from "solid-js"
+ import { makeEventListener } from "@solid-primitives/event-listener"
+-import { showToast } from "@/utils/toast"
++import { showToast, dismissToast } from "@/utils/toast"
+ import { type ContentPart, type ImageAttachmentPart, type usePrompt } from "@/context/prompt"
+ import { useLanguage } from "@/context/language"
+ import { usePlatform } from "@/context/platform"
+@@ -19,6 +19,7 @@ type PromptAttachmentsCoreInput = {
+   focusEditor?: () => void
+   addPart?: (part: ContentPart) => boolean
+   warn?: () => void
++  notify?: (converting: boolean) => void
+   readClipboardImage?: () => Promise<File | null>
+   getPathForFile?: (file: File) => string
+   draftStore?: DraftStore
+@@ -47,12 +48,17 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
+     if (!target) return false
+     let source = file
+     if (isHeicFile(source)) {
+-      const converted = await convertHeicToJpeg(source).catch(() => undefined)
+-      if (!converted) {
+-        if (toast) input.warn?.()
+-        return false
++      input.notify?.(true)
++      try {
++        const converted = await convertHeicToJpeg(source).catch(() => undefined)
++        if (!converted) {
++          if (toast) input.warn?.()
++          return false
++        }
++        source = converted
++      } finally {
++        input.notify?.(false)
+       }
+-      source = converted
+     }
+     const mime = await attachmentMime(source)
+     if (!mime) {
+@@ -159,6 +165,7 @@ export function createPromptAttachmentsCore(input: PromptAttachmentsCoreInput) {
+ export function createPromptAttachments(input: PromptAttachmentsInput) {
+   const language = useLanguage()
+   const platform = usePlatform()
++  let convertingToast: number | undefined
+   const attachments = createPromptAttachmentsCore({
+     ...input,
+     draftStore: platform.draftStore,
+@@ -169,6 +176,16 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
+         description: language.t("prompt.toast.pasteUnsupported.description"),
+       })
+     },
++    notify: (converting) => {
++      if (converting) {
++        convertingToast = showToast({ title: language.t("prompt.toast.heicConverting.title") })
++        return
++      }
++      if (convertingToast !== undefined) {
++        dismissToast(convertingToast)
++        convertingToast = undefined
++      }
++    },
+   })
+ 
+   const handleGlobalDragOver = (event: DragEvent) => {
+diff --git a/packages/app/src/components/prompt-input/attachments.test.ts b/packages/app/src/components/prompt-input/attachments.test.ts
+index 1e7ea86af4..168e83320b 100644
+--- a/packages/app/src/components/prompt-input/attachments.test.ts
++++ b/packages/app/src/components/prompt-input/attachments.test.ts
+@@ -136,6 +136,79 @@ describe("heic attachments", () => {
+       setHeicConverterForTests(undefined)
+     }
+   })
++
++  test("notifies while a HEIC photo converts", async () => {
++    let release!: (blob: Blob) => void
++    const gate = new Promise<Blob>((resolve) => {
++      release = resolve
++    })
++    setHeicConverterForTests(() => gate)
++    try {
++      const states: boolean[] = []
++      const attachments = createPromptAttachmentsCore({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => document.createElement("div"),
++        draftStore: { putBlob: async () => ({ id: "blob", url: "blob:jpeg" }) } as never,
++        warn: () => undefined,
++        notify: (converting) => {
++          states.push(converting)
++        },
++      })
++      const pending = attachments.addAttachment(new File(["heic"], "photo.heic", { type: "image/heic" }))
++      expect(states).toEqual([true])
++      release(new Blob(["jpeg"], { type: "image/jpeg" }))
++      expect(await pending).toBe(true)
++      expect(states).toEqual([true, false])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("notifies around a failed HEIC conversion", async () => {
++    setHeicConverterForTests(async () => Promise.reject(new Error("unsupported variant")))
++    try {
++      const states: boolean[] = []
++      const attachments = createPromptAttachmentsCore({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => document.createElement("div"),
++        warn: () => undefined,
++        notify: (converting) => {
++          states.push(converting)
++        },
++      })
++      expect(await attachments.addAttachment(new File(["heic"], "photo.heic", { type: "image/heic" }))).toBe(false)
++      expect(states).toEqual([true, false])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("does not notify for regular images", async () => {
++    const states: boolean[] = []
++    const attachments = createPromptAttachmentsCore({
++      capture: () => ({
++        current: () => [],
++        cursor: () => 0,
++        set: () => undefined,
++      }),
++      editor: () => document.createElement("div"),
++      draftStore: { putBlob: async () => ({ id: "blob", url: "blob:png" }) } as never,
++      warn: () => undefined,
++      notify: (converting) => {
++        states.push(converting)
++      },
++    })
++    expect(await attachments.addAttachment(new File(["png"], "photo.png", { type: "image/png" }))).toBe(true)
++    expect(states).toEqual([])
++  })
+ })
+ 
+ describe("pickAttachmentFiles", () => {
+diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
+index 9d61e3b1fe..c5ebb8561c 100644
+--- a/packages/session-ui/src/v2/components/prompt-input/attachments.ts
++++ b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
+@@ -80,6 +80,7 @@ export type PromptInputV2AttachmentConfig = {
+   isDialogActive: () => boolean
+   warn: () => void
+   duplicate: () => void
++  notify?: (converting: boolean) => void
+   onError: (error: unknown) => void
+   readClipboardImage?: () => Promise<File | null>
+   getPathForFile?: (file: File) => string
+@@ -105,12 +106,17 @@ export function createPromptInputV2Attachments(
+     if (!target) return false
+     let source = file
+     if (isHeicFile(source)) {
+-      const converted = await convertHeicToJpeg(source).catch(() => undefined)
+-      if (!converted) {
+-        if (toast) input.warn()
+-        return false
++      input.notify?.(true)
++      try {
++        const converted = await convertHeicToJpeg(source).catch(() => undefined)
++        if (!converted) {
++          if (toast) input.warn()
++          return false
++        }
++        source = converted
++      } finally {
++        input.notify?.(false)
+       }
+-      source = converted
+     }
+     const mime = await attachmentMime(source)
+     if (!mime) {
+diff --git a/packages/app/src/components/prompt-input-v2.tsx b/packages/app/src/components/prompt-input-v2.tsx
+index 481b7922cf..81186c6973 100644
+--- a/packages/app/src/components/prompt-input-v2.tsx
++++ b/packages/app/src/components/prompt-input-v2.tsx
+@@ -25,7 +25,7 @@ import { usePlatform } from "@/context/platform"
+ import { useSDK } from "@/context/sdk"
+ import { useSync } from "@/context/sync"
+ import { createSessionTabs } from "@/pages/session/helpers"
+-import { showToast } from "@/utils/toast"
++import { showToast, dismissToast } from "@/utils/toast"
+ import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
+ import {
+   createPromptInputV2Controller,
+@@ -319,6 +319,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
+     })),
+   )
+   const variants = createMemo(() => ["default", ...props.controls.model.selection.variant.list()])
++  let convertingToast: number | undefined
+   const controller = createPromptInputV2Controller({
+     store: () => prompt.capture().store,
+     state: interaction,
+@@ -372,6 +373,16 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
+           description: language.t("prompt.toast.pasteUnsupported.description"),
+         }),
+       duplicate: () => showToast({ title: language.t("prompt.toast.attachmentDuplicate.title") }),
++      notify: (converting) => {
++        if (converting) {
++          convertingToast = showToast({ title: language.t("prompt.toast.heicConverting.title") })
++          return
++        }
++        if (convertingToast !== undefined) {
++          dismissToast(convertingToast)
++          convertingToast = undefined
++        }
++      },
+       onError: (error) =>
+         showToast({
+           variant: "error",
+diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
+index 0000000000..0000000000 100644
+--- a/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
++++ b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
+@@ -128,4 +128,74 @@
+     }
+   })
+ 
++  test("notifies while a HEIC photo converts", async () => {
++    let release!: (blob: Blob) => void
++    const gate = new Promise<Blob>((resolve) => {
++      release = resolve
++    })
++    setHeicConverterForTests(() => gate)
++    try {
++      const states: boolean[] = []
++      let pending!: Promise<boolean>
++      await createRoot(async () => {
++        pending = createPromptInputV2Attachments({
++          capture: () => ({
++            current: () => [],
++            cursor: () => 0,
++            set: () => undefined,
++          }),
++          editor: () => ({} as HTMLElement),
++          focusEditor: () => undefined,
++          addPart: () => false,
++          setDraggingType: () => undefined,
++          directory: () => "/tmp",
++          isDialogActive: () => false,
++          warn: () => undefined,
++          duplicate: () => undefined,
++          onError: () => undefined,
++          store: async () => ({ id: "blob", url: "blob:jpeg" }),
++          notify: (converting) => {
++            states.push(converting)
++          },
++        }).addAttachments([new File(["heic"], "photo.heic", { type: "image/heic" })])
++        // addAttachments fans out through a sequential reduce, so the first
++        // convert starts a microtask later (unlike v1's direct add call).
++        await Promise.resolve()
++        expect(states).toEqual([true])
++        release(new Blob(["jpeg"], { type: "image/jpeg" }))
++      })
++      expect(await pending).toBe(true)
++      expect(states).toEqual([true, false])
++    } finally {
++      setHeicConverterForTests(undefined)
++    }
++  })
++
++  test("does not notify for regular images", async () => {
++    const states: boolean[] = []
++    const ok = await createRoot(() =>
++      createPromptInputV2Attachments({
++        capture: () => ({
++          current: () => [],
++          cursor: () => 0,
++          set: () => undefined,
++        }),
++        editor: () => ({} as HTMLElement),
++        focusEditor: () => undefined,
++        addPart: () => false,
++        setDraggingType: () => undefined,
++        directory: () => "/tmp",
++        isDialogActive: () => false,
++        warn: () => undefined,
++        duplicate: () => undefined,
++        onError: () => undefined,
++        store: async () => ({ id: "blob", url: "blob:png" }),
++        notify: (converting) => {
++          states.push(converting)
++        },
++      }).addAttachments([new File(["png"], "photo.png", { type: "image/png" })]),
++    )
++    expect(ok).toBe(true)
++    expect(states).toEqual([])
++  })
+ })
+diff --git a/packages/app/src/i18n/am.ts b/packages/app/src/i18n/am.ts
+index bda48350e5..5595dba081 100644
+--- a/packages/app/src/i18n/am.ts
++++ b/packages/app/src/i18n/am.ts
+@@ -377,6 +377,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "የማይደገፍ ዓባሪ",
+   "prompt.toast.pasteUnsupported.description": "ምስሎች፣ ፒዲኤፎች ወይም የጽሑፍ ፋይሎች ብቻ እዚህ ጋር ሊጣመሩ ይችላሉ።",
+   "prompt.toast.attachmentDuplicate.title": "ይህ ፋይል አስቀድሞ ተሰቅሏል",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "ወኪል እና ሞዴል ይምረጡ",
+   "prompt.toast.modelAgentRequired.description": "ፕሮምፕት ከመላክዎ በፊት ወኪል እና ሞዴል ይምረጡ።",
+   "prompt.toast.worktreeCreateFailed.title": "Git worktree መፍጠር አልተሳካም",
+diff --git a/packages/app/src/i18n/ar.ts b/packages/app/src/i18n/ar.ts
+index 3f55b30840..26c0f5f4ff 100644
+--- a/packages/app/src/i18n/ar.ts
++++ b/packages/app/src/i18n/ar.ts
+@@ -385,6 +385,7 @@ export const dict = {
+   "prompt.action.stop": "إيقاف",
+   "prompt.toast.pasteUnsupported.title": "مرفق غير مدعوم",
+   "prompt.toast.attachmentDuplicate.title": "تم تحميل هذا الملف بالفعل",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "يمكن إرفاق الصور أو ملفات PDF أو الملفات النصية فقط هنا.",
+   "prompt.toast.modelAgentRequired.title": "حدد وكيلاً ونموذجاً",
+   "prompt.toast.modelAgentRequired.description": "اختر وكيلاً ونموذجاً قبل إرسال الموجه.",
+diff --git a/packages/app/src/i18n/az.ts b/packages/app/src/i18n/az.ts
+index d818ae57fd..9cd579a15d 100644
+--- a/packages/app/src/i18n/az.ts
++++ b/packages/app/src/i18n/az.ts
+@@ -384,6 +384,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Dəstəklənməyən əlavə",
+   "prompt.toast.pasteUnsupported.description": "Buraya yalnız şəkillər, PDF-lər və ya mətn faylları əlavə edilə bilər.",
+   "prompt.toast.attachmentDuplicate.title": "Bu fayl artıq yüklənib",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Agent və model seçin",
+   "prompt.toast.modelAgentRequired.description": "Prompt göndərməzdən əvvəl agent və model seçin.",
+   "prompt.toast.worktreeCreateFailed.title": "Worktree yaradıla bilmədi",
+diff --git a/packages/app/src/i18n/bg.ts b/packages/app/src/i18n/bg.ts
+index 7f63d1fa4b..0edc5bd4c3 100644
+--- a/packages/app/src/i18n/bg.ts
++++ b/packages/app/src/i18n/bg.ts
+@@ -384,6 +384,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Неподдържан прикачен файл",
+   "prompt.toast.pasteUnsupported.description": "Тук могат да се прикачват само изображения, PDF или текстови файлове.",
+   "prompt.toast.attachmentDuplicate.title": "Този файл вече е качен",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Изберете агент и модел",
+   "prompt.toast.modelAgentRequired.description": "Изберете агент и модел, преди да изпратите подкана.",
+   "prompt.toast.worktreeCreateFailed.title": "Неуспешно създаване на работно дърво",
+diff --git a/packages/app/src/i18n/bn.ts b/packages/app/src/i18n/bn.ts
+index 5f0698ab64..ba369580ab 100644
+--- a/packages/app/src/i18n/bn.ts
++++ b/packages/app/src/i18n/bn.ts
+@@ -381,6 +381,7 @@ export const dict: Record<string, string> = {
+   "prompt.toast.pasteUnsupported.title": "অসমর্থিত সংযুক্তি",
+   "prompt.toast.pasteUnsupported.description": "এখানে শুধুমাত্র ছবি, পিডিএফ বা টেক্সট ফাইল সংযুক্ত করা যাবে।",
+   "prompt.toast.attachmentDuplicate.title": "এই ফাইল ইতিমধ্যে আপলোড করা হয়েছে",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "একটি এজেন্ট এবং মডেল নির্বাচন করুন",
+   "prompt.toast.modelAgentRequired.description": "প্রম্পট পাঠানোর আগে একটি এজেন্ট এবং মডেল বেছে নিন।",
+   "prompt.toast.worktreeCreateFailed.title": "ওয়ার্কট্রি তৈরি করতে ব্যর্থ হয়েছে৷",
+diff --git a/packages/app/src/i18n/br.ts b/packages/app/src/i18n/br.ts
+index 09da845ccb..ef87163e4f 100644
+--- a/packages/app/src/i18n/br.ts
++++ b/packages/app/src/i18n/br.ts
+@@ -387,6 +387,7 @@ export const dict = {
+   "prompt.action.stop": "Parar",
+   "prompt.toast.pasteUnsupported.title": "Anexo não suportado",
+   "prompt.toast.attachmentDuplicate.title": "Este arquivo já foi enviado",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Apenas imagens, PDFs ou arquivos de texto podem ser anexados aqui.",
+   "prompt.toast.modelAgentRequired.title": "Selecione um agente e modelo",
+   "prompt.toast.modelAgentRequired.description": "Escolha um agente e modelo antes de enviar um prompt.",
+diff --git a/packages/app/src/i18n/bs.ts b/packages/app/src/i18n/bs.ts
+index feb41c651a..b49220bf9f 100644
+--- a/packages/app/src/i18n/bs.ts
++++ b/packages/app/src/i18n/bs.ts
+@@ -408,6 +408,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Nepodržan prilog",
+   "prompt.toast.attachmentDuplicate.title": "Ova datoteka je već učitana",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Ovdje se mogu priložiti samo slike, PDF-ovi ili tekstualne datoteke.",
+   "prompt.toast.modelAgentRequired.title": "Odaberi agenta i model",
+   "prompt.toast.modelAgentRequired.description": "Odaberi agenta i model prije slanja upita.",
+diff --git a/packages/app/src/i18n/ca.ts b/packages/app/src/i18n/ca.ts
+index 21ad325607..8a0702ef15 100644
+--- a/packages/app/src/i18n/ca.ts
++++ b/packages/app/src/i18n/ca.ts
+@@ -383,6 +383,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Fitxer adjunt no compatible",
+   "prompt.toast.pasteUnsupported.description": "Aquí només es poden adjuntar imatges, PDFs o fitxers de text.",
+   "prompt.toast.attachmentDuplicate.title": "Aquest fitxer ja s'ha penjat",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Seleccioneu un agent i un model",
+   "prompt.toast.modelAgentRequired.description": "Trieu un agent i un model abans d'enviar una sol·licitud.",
+   "prompt.toast.worktreeCreateFailed.title": "No s'ha pogut crear l'arbre de treball",
+diff --git a/packages/app/src/i18n/cs.ts b/packages/app/src/i18n/cs.ts
+index d79d4eb5a7..220ce51ba9 100644
+--- a/packages/app/src/i18n/cs.ts
++++ b/packages/app/src/i18n/cs.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Nepodporovaná příloha",
+   "prompt.toast.pasteUnsupported.description": "Zde lze připojit pouze obrázky, PDFs nebo textové soubory.",
+   "prompt.toast.attachmentDuplicate.title": "Tento soubor již byl nahrán",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Vyberte agenta a model",
+   "prompt.toast.modelAgentRequired.description": "Před odesláním výzvy vyberte zástupce a model.",
+   "prompt.toast.worktreeCreateFailed.title": "Vytvoření pracovního stromu se nezdařilo",
+diff --git a/packages/app/src/i18n/da.ts b/packages/app/src/i18n/da.ts
+index 87737b0942..d69cf4facd 100644
+--- a/packages/app/src/i18n/da.ts
++++ b/packages/app/src/i18n/da.ts
+@@ -305,6 +305,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Ikke understøttet vedhæftning",
+   "prompt.toast.attachmentDuplicate.title": "Denne fil er allerede uploadet",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Kun billeder, PDF'er eller tekstfiler kan vedhæftes her.",
+   "prompt.toast.modelAgentRequired.title": "Vælg en agent og model",
+   "prompt.toast.modelAgentRequired.description": "Vælg en agent og model før du sender en forespørgsel.",
+diff --git a/packages/app/src/i18n/de.ts b/packages/app/src/i18n/de.ts
+index 00849598c5..8396c38e04 100644
+--- a/packages/app/src/i18n/de.ts
++++ b/packages/app/src/i18n/de.ts
+@@ -291,6 +291,7 @@ export const dict = {
+   "prompt.action.stop": "Stoppen",
+   "prompt.toast.pasteUnsupported.title": "Nicht unterstützter Anhang",
+   "prompt.toast.attachmentDuplicate.title": "Diese Datei wurde bereits hochgeladen",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Hier können nur Bilder, PDFs oder Textdateien angehängt werden.",
+   "prompt.toast.modelAgentRequired.title": "Wählen Sie einen Agenten und ein Modell",
+   "prompt.toast.modelAgentRequired.description":
+diff --git a/packages/app/src/i18n/dv.ts b/packages/app/src/i18n/dv.ts
+index 27b5fea869..f50fcce96f 100644
+--- a/packages/app/src/i18n/dv.ts
++++ b/packages/app/src/i18n/dv.ts
+@@ -387,6 +387,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.description":
+     "މިތަނުގައި އެޓޭޗް ކުރެވޭނީ ހަމައެކަނި ތަސްވީރު، PDFs، ނުވަތަ ޓެކްސްޓް ފައިލްތަކެވެ.",
+   "prompt.toast.attachmentDuplicate.title": "މި ފައިލް މިހާރު ވަނީ އަޕްލޯޑްކޮށްފައެވެ",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "އޭޖެންޓަކާއި މޮޑެލްއެއް ހޮވުން",
+   "prompt.toast.modelAgentRequired.description": "ޕްރޮމްޕްޓެއް ފޮނުވުމުގެ ކުރިން އޭޖެންޓަކާއި މޮޑެލްއެއް ހޮވުން.",
+   "prompt.toast.worktreeCreateFailed.title": "ވޯކްޓްރީ އުފެއްދުމަށް ނާކާމިޔާބުވިއެވެ",
+diff --git a/packages/app/src/i18n/dz.ts b/packages/app/src/i18n/dz.ts
+index 3b2ad46ca3..680655da03 100644
+--- a/packages/app/src/i18n/dz.ts
++++ b/packages/app/src/i18n/dz.ts
+@@ -386,6 +386,7 @@ export const dict: Record<string, string> = {
+   "prompt.toast.pasteUnsupported.description":
+     "པར་རིས་དང་པི་ཌི་ཨེཕ་ ཡང་ན་ ཚིག་ཡིག་ཡིག་སྣོད་ཚུ་རྐྱངམ་ཅིག་ ནཱ་ལུ་མཉམ་སྦྲགས་འབད་བཏུབ།",
+   "prompt.toast.attachmentDuplicate.title": "ཡིག་སྣོད་འདི་ཧེ་མ་ལས་སྐྱེལ་བཙུགས་འབད་ཡི།",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "ལས་ཚབ་དང་དཔེ་ཚད་ཅིག་སེལ་འཐུ་འབད།",
+   "prompt.toast.modelAgentRequired.description": "བརྡ་སྟོན་མ་གཏང་པའི་ཧེ་མ་ ལས་ཚབ་དང་དཔེ་ཚད་གདམ་ཁ་རྐྱབས།",
+   "prompt.toast.worktreeCreateFailed.title": "Git worktree གསར་བསྐྲུན་འབད་མ་ཚུགས།",
+diff --git a/packages/app/src/i18n/el.ts b/packages/app/src/i18n/el.ts
+index 8f91b46af0..4376a6a845 100644
+--- a/packages/app/src/i18n/el.ts
++++ b/packages/app/src/i18n/el.ts
+@@ -382,6 +382,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Μη υποστηριζόμενο συνημμένο",
+   "prompt.toast.pasteUnsupported.description": "Εδώ επισυνάπτονται μόνο εικόνες, αρχεία PDF ή αρχεία κειμένου.",
+   "prompt.toast.attachmentDuplicate.title": "Αυτό το αρχείο έχει ήδη μεταφορτωθεί",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Επιλέξτε έναν πράκτορα και μοντέλο",
+   "prompt.toast.modelAgentRequired.description":
+     "Επιλέξτε έναν πράκτορα και ένα μοντέλο πριν στείλετε ένα μήνυμα προτροπής.",
+diff --git a/packages/app/src/i18n/en.ts b/packages/app/src/i18n/en.ts
+index 62d4dc1ae6..480a4cc30c 100644
+--- a/packages/app/src/i18n/en.ts
++++ b/packages/app/src/i18n/en.ts
+@@ -311,6 +311,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
+   "prompt.toast.pasteUnsupported.description": "Only images, PDFs, or text files can be attached here.",
+   "prompt.toast.attachmentDuplicate.title": "This file has already been uploaded",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Select an agent and model",
+   "prompt.toast.modelAgentRequired.description": "Choose an agent and model before sending a prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Failed to create worktree",
+diff --git a/packages/app/src/i18n/es.ts b/packages/app/src/i18n/es.ts
+index 9e9ff2c367..9fbe5ddba8 100644
+--- a/packages/app/src/i18n/es.ts
++++ b/packages/app/src/i18n/es.ts
+@@ -408,6 +408,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Adjunto no compatible",
+   "prompt.toast.attachmentDuplicate.title": "Este archivo ya se ha subido",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description":
+     "Aquí solo se pueden adjuntar imágenes, archivos PDF o archivos de texto.",
+   "prompt.toast.modelAgentRequired.title": "Selecciona un agente y modelo",
+diff --git a/packages/app/src/i18n/et.ts b/packages/app/src/i18n/et.ts
+index d78296675e..124c68af43 100644
+--- a/packages/app/src/i18n/et.ts
++++ b/packages/app/src/i18n/et.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Toetamata manus",
+   "prompt.toast.pasteUnsupported.description": "Siia saab lisada ainult pilte, PDFs või tekstifaile.",
+   "prompt.toast.attachmentDuplicate.title": "See fail on juba üles laaditud",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Valige agent ja mudel",
+   "prompt.toast.modelAgentRequired.description": "Enne viipa saatmist valige agent ja mudel.",
+   "prompt.toast.worktreeCreateFailed.title": "Tööpuu loomine ebaõnnestus",
+diff --git a/packages/app/src/i18n/fa.ts b/packages/app/src/i18n/fa.ts
+index 0d3d721b53..acd91ee8fa 100644
+--- a/packages/app/src/i18n/fa.ts
++++ b/packages/app/src/i18n/fa.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "پیوست پشتیبانی نشده است",
+   "prompt.toast.pasteUnsupported.description": "فقط تصاویر، PDFs، یا فایل های متنی را می توان در اینجا پیوست کرد.",
+   "prompt.toast.attachmentDuplicate.title": "این فایل قبلا آپلود شده است",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "یک عامل و مدل را انتخاب کنید",
+   "prompt.toast.modelAgentRequired.description": "قبل از ارسال درخواست، یک عامل و مدل را انتخاب کنید.",
+   "prompt.toast.worktreeCreateFailed.title": "ورک‌تری ایجاد نشد",
+diff --git a/packages/app/src/i18n/fi.ts b/packages/app/src/i18n/fi.ts
+index aa9c92574c..e5a6e80d3f 100644
+--- a/packages/app/src/i18n/fi.ts
++++ b/packages/app/src/i18n/fi.ts
+@@ -288,6 +288,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Liitettä ei tueta",
+   "prompt.toast.pasteUnsupported.description": "Vain kuvia, PDF-tiedostoja tai tekstitiedostoja voi liittää tähän.",
+   "prompt.toast.attachmentDuplicate.title": "Tämä tiedosto on jo ladattu",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Valitse agentti ja malli",
+   "prompt.toast.modelAgentRequired.description": "Valitse agentti ja malli ennen kehotteen lähettämistä.",
+   "prompt.toast.worktreeCreateFailed.title": "Työpuun luominen epäonnistui",
+diff --git a/packages/app/src/i18n/fo.ts b/packages/app/src/i18n/fo.ts
+index 4329a35b42..bb44a0d7d8 100644
+--- a/packages/app/src/i18n/fo.ts
++++ b/packages/app/src/i18n/fo.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Óstuðlað viðhefti",
+   "prompt.toast.pasteUnsupported.description": "Bert myndir, PDFs, ella tekstfílur kunnu viðheftast her.",
+   "prompt.toast.attachmentDuplicate.title": "Hendan fílan er longu løgd upp.",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Vel agent og modell",
+   "prompt.toast.modelAgentRequired.description": "Vel agent og modell, áðrenn tú sendir ein prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Tað eydnaðist ikki at stovna Git worktree",
+diff --git a/packages/app/src/i18n/fr.ts b/packages/app/src/i18n/fr.ts
+index 3c89860a44..1091f9c3b3 100644
+--- a/packages/app/src/i18n/fr.ts
++++ b/packages/app/src/i18n/fr.ts
+@@ -390,6 +390,7 @@ export const dict = {
+   "prompt.action.stop": "Arrêter",
+   "prompt.toast.pasteUnsupported.title": "Pièce jointe non prise en charge",
+   "prompt.toast.attachmentDuplicate.title": "Ce fichier a déjà été téléversé",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description":
+     "Seules les images, les PDF ou les fichiers texte peuvent être joints ici.",
+   "prompt.toast.modelAgentRequired.title": "Sélectionnez un agent et un modèle",
+diff --git a/packages/app/src/i18n/hi.ts b/packages/app/src/i18n/hi.ts
+index 0aaf8e14dc..79ea48c192 100644
+--- a/packages/app/src/i18n/hi.ts
++++ b/packages/app/src/i18n/hi.ts
+@@ -388,6 +388,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "असमर्थित अनुलग्नक",
+   "prompt.toast.pasteUnsupported.description": "यहां केवल छवियां, PDFs, या टेक्स्ट फ़ाइलें संलग्न की जा सकती हैं।",
+   "prompt.toast.attachmentDuplicate.title": "यह फ़ाइल पहले ही अपलोड की जा चुकी है",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "एक एजेंट और मॉडल चुनें",
+   "prompt.toast.modelAgentRequired.description": "प्रॉम्प्ट भेजने से पहले एक एजेंट और मॉडल चुनें।",
+   "prompt.toast.worktreeCreateFailed.title": "वर्कट्री बनाने में विफल",
+diff --git a/packages/app/src/i18n/hr.ts b/packages/app/src/i18n/hr.ts
+index 2130c88ada..47e30f3781 100644
+--- a/packages/app/src/i18n/hr.ts
++++ b/packages/app/src/i18n/hr.ts
+@@ -385,6 +385,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Nepodržani privitak",
+   "prompt.toast.pasteUnsupported.description": "Ovdje se mogu priložiti samo slike, PDF-ovi ili tekstualne datoteke.",
+   "prompt.toast.attachmentDuplicate.title": "Ova datoteka je već učitana",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Odaberite agenta i model",
+   "prompt.toast.modelAgentRequired.description": "Odaberite agenta i model prije slanja upita.",
+   "prompt.toast.worktreeCreateFailed.title": "Izrada radnog stabla nije uspjela",
+diff --git a/packages/app/src/i18n/hu.ts b/packages/app/src/i18n/hu.ts
+index 664abf8ee4..36963c3560 100644
+--- a/packages/app/src/i18n/hu.ts
++++ b/packages/app/src/i18n/hu.ts
+@@ -385,6 +385,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Nem támogatott melléklet",
+   "prompt.toast.pasteUnsupported.description": "Ide csak képeket, PDF-eket vagy szöveges fájlokat lehet csatolni.",
+   "prompt.toast.attachmentDuplicate.title": "Ezt a fájlt már feltöltötték",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Válasszon egy ügynököt és modellt",
+   "prompt.toast.modelAgentRequired.description": "A felszólítás elküldése előtt válasszon ügynököt és modellt.",
+   "prompt.toast.worktreeCreateFailed.title": "Nem sikerült létrehozni a munkafát",
+diff --git a/packages/app/src/i18n/hy.ts b/packages/app/src/i18n/hy.ts
+index 6eac43b5e6..be6519a6ac 100644
+--- a/packages/app/src/i18n/hy.ts
++++ b/packages/app/src/i18n/hy.ts
+@@ -383,6 +383,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Չաջակցվող հավելված",
+   "prompt.toast.pasteUnsupported.description": "Այստեղ կարող են կցվել միայն պատկերներ, PDF կամ տեքստային ֆայլեր։",
+   "prompt.toast.attachmentDuplicate.title": "Այս ֆայլն արդեն վերբեռնվել է",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Ընտրեք գործակալ և մոդել",
+   "prompt.toast.modelAgentRequired.description": "Ընտրեք գործակալ և մոդել՝ նախքան հուշում ուղարկելը։",
+   "prompt.toast.worktreeCreateFailed.title": "Չհաջողվեց ստեղծել աշխատանքային ծառը",
+diff --git a/packages/app/src/i18n/id.ts b/packages/app/src/i18n/id.ts
+index 96dc3c7592..2d8fc81ac8 100644
+--- a/packages/app/src/i18n/id.ts
++++ b/packages/app/src/i18n/id.ts
+@@ -409,6 +409,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Lampiran tidak didukung",
+   "prompt.toast.pasteUnsupported.description": "Hanya gambar, PDF, atau berkas teks yang dapat dilampirkan di sini.",
+   "prompt.toast.attachmentDuplicate.title": "Berkas ini sudah diunggah",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Pilih agen dan model",
+   "prompt.toast.modelAgentRequired.description": "Pilih agen dan model sebelum mengirim prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Gagal membuat worktree",
+diff --git a/packages/app/src/i18n/is.ts b/packages/app/src/i18n/is.ts
+index a45ed9a40c..4c47a295e0 100644
+--- a/packages/app/src/i18n/is.ts
++++ b/packages/app/src/i18n/is.ts
+@@ -385,6 +385,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Óstudd viðhengi",
+   "prompt.toast.pasteUnsupported.description": "Aðeins er hægt að hengja myndir, PDF-skjöl eða textaskrár hér við.",
+   "prompt.toast.attachmentDuplicate.title": "Þessari skrá hefur þegar verið hlaðið upp",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Veldu fulltrúa og líkan",
+   "prompt.toast.modelAgentRequired.description": "Veldu fulltrúa og líkan áður en þú sendir kvaðningu.",
+   "prompt.toast.worktreeCreateFailed.title": "Mistókst að búa til vinnutré",
+diff --git a/packages/app/src/i18n/it.ts b/packages/app/src/i18n/it.ts
+index a093e11485..e1ed996bad 100644
+--- a/packages/app/src/i18n/it.ts
++++ b/packages/app/src/i18n/it.ts
+@@ -290,6 +290,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Allegato non supportato",
+   "prompt.toast.pasteUnsupported.description": "Qui è possibile allegare solo immagini, PDF o file di testo.",
+   "prompt.toast.attachmentDuplicate.title": "Questo file è già stato caricato",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Seleziona un agente e un modello",
+   "prompt.toast.modelAgentRequired.description": "Scegli un agente e un modello prima di inviare un prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Impossibile creare il worktree",
+diff --git a/packages/app/src/i18n/ja.ts b/packages/app/src/i18n/ja.ts
+index b96e8b544b..c0f8d58ddc 100644
+--- a/packages/app/src/i18n/ja.ts
++++ b/packages/app/src/i18n/ja.ts
+@@ -384,6 +384,7 @@ export const dict = {
+   "prompt.action.stop": "停止",
+   "prompt.toast.pasteUnsupported.title": "サポートされていない添付ファイル",
+   "prompt.toast.attachmentDuplicate.title": "このファイルはすでにアップロードされています",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "画像、PDF、またはテキストファイルのみ添付できます。",
+   "prompt.toast.modelAgentRequired.title": "エージェントとモデルを選択",
+   "prompt.toast.modelAgentRequired.description": "プロンプトを送信する前にエージェントとモデルを選択してください。",
+diff --git a/packages/app/src/i18n/ka.ts b/packages/app/src/i18n/ka.ts
+index be052930a2..cf5813f427 100644
+--- a/packages/app/src/i18n/ka.ts
++++ b/packages/app/src/i18n/ka.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "მხარდაუჭერელი დანართი",
+   "prompt.toast.pasteUnsupported.description": "აქ შეიძლება დაერთოს მხოლოდ სურათები, PDF ან ტექსტური ფაილები.",
+   "prompt.toast.attachmentDuplicate.title": "ეს ფაილი უკვე ატვირთულია",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "აირჩიეთ აგენტი და მოდელი",
+   "prompt.toast.modelAgentRequired.description": "აირჩიეთ აგენტი და მოდელი მოთხოვნის გაგზავნამდე.",
+   "prompt.toast.worktreeCreateFailed.title": "ვერ შეიქმნა სამუშაო ხე",
+diff --git a/packages/app/src/i18n/km.ts b/packages/app/src/i18n/km.ts
+index 7f1b61fe36..c3606664d9 100644
+--- a/packages/app/src/i18n/km.ts
++++ b/packages/app/src/i18n/km.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "ឯកសារភ្ជាប់ដែលមិនគាំទ្រ",
+   "prompt.toast.pasteUnsupported.description": "មានតែរូបភាព PDF ឬឯកសារអត្ថបទប៉ុណ្ណោះដែលអាចភ្ជាប់មកទីនេះបាន។",
+   "prompt.toast.attachmentDuplicate.title": "ឯកសារនេះត្រូវបានផ្ទុកឡើងរួចហើយ",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "ជ្រើសរើសភ្នាក់ងារ និងម៉ូដែល",
+   "prompt.toast.modelAgentRequired.description": "ជ្រើសរើសភ្នាក់ងារ និងម៉ូដែលមុនពេលផ្ញើប្រអប់បញ្ចូល។",
+   "prompt.toast.worktreeCreateFailed.title": "បរាជ័យក្នុងការបង្កើត Git worktree",
+diff --git a/packages/app/src/i18n/ko.ts b/packages/app/src/i18n/ko.ts
+index b96fb4c594..f56ec3a390 100644
+--- a/packages/app/src/i18n/ko.ts
++++ b/packages/app/src/i18n/ko.ts
+@@ -273,6 +273,7 @@ export const dict = {
+   "prompt.action.stop": "중지",
+   "prompt.toast.pasteUnsupported.title": "지원되지 않는 첨부 파일",
+   "prompt.toast.attachmentDuplicate.title": "이 파일은 이미 업로드되었습니다",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "이미지, PDF 또는 텍스트 파일만 첨부할 수 있습니다.",
+   "prompt.toast.modelAgentRequired.title": "에이전트 및 모델 선택",
+   "prompt.toast.modelAgentRequired.description": "프롬프트를 보내기 전에 에이전트와 모델을 선택하세요.",
+diff --git a/packages/app/src/i18n/lo.ts b/packages/app/src/i18n/lo.ts
+index acdc26df08..55364dfb0a 100644
+--- a/packages/app/src/i18n/lo.ts
++++ b/packages/app/src/i18n/lo.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "ບໍ່ຮອງຮັບໄຟລ໌ແນບ",
+   "prompt.toast.pasteUnsupported.description": "ພຽງແຕ່ຮູບພາບ, PDFs, ຫຼືໄຟລ໌ຂໍ້ຄວາມສາມາດຕິດຢູ່ນີ້.",
+   "prompt.toast.attachmentDuplicate.title": "ໄຟລ໌ນີ້ໄດ້ຖືກອັບໂຫລດໄປກ່ອນແລ້ວ",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "ເລືອກຕົວແທນ ແລະຕົວແບບ",
+   "prompt.toast.modelAgentRequired.description": "ເລືອກຕົວແທນ ແລະຕົວແບບກ່ອນສົ່ງ prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "ສ້າງ Git worktree ບໍ່ສຳເລັດ",
+diff --git a/packages/app/src/i18n/lt.ts b/packages/app/src/i18n/lt.ts
+index ba161eb318..b9be1305e9 100644
+--- a/packages/app/src/i18n/lt.ts
++++ b/packages/app/src/i18n/lt.ts
+@@ -386,6 +386,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Nepalaikomas priedas",
+   "prompt.toast.pasteUnsupported.description": "Čia galima pridėti tik vaizdus, ​​PDF arba tekstinius failus.",
+   "prompt.toast.attachmentDuplicate.title": "Šis failas jau buvo įkeltas",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Pasirinkite agentą ir modelį",
+   "prompt.toast.modelAgentRequired.description": "Prieš siųsdami raginimą, pasirinkite agentą ir modelį.",
+   "prompt.toast.worktreeCreateFailed.title": "Nepavyko sukurti darbo medžio",
+diff --git a/packages/app/src/i18n/lv.ts b/packages/app/src/i18n/lv.ts
+index df4c5b2dcd..35d2ff95c3 100644
+--- a/packages/app/src/i18n/lv.ts
++++ b/packages/app/src/i18n/lv.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Neatbalstīts pielikums",
+   "prompt.toast.pasteUnsupported.description": "Šeit var pievienot tikai attēlus, PDF vai teksta failus.",
+   "prompt.toast.attachmentDuplicate.title": "Šis fails jau ir augšupielādēts",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Izvēlieties aģentu un modeli",
+   "prompt.toast.modelAgentRequired.description": "Pirms nosūtīšanas izvēlieties aģentu un modeli.",
+   "prompt.toast.worktreeCreateFailed.title": "Neizdevās izveidot darba koku",
+diff --git a/packages/app/src/i18n/mk.ts b/packages/app/src/i18n/mk.ts
+index 01e60baa40..82da47d46b 100644
+--- a/packages/app/src/i18n/mk.ts
++++ b/packages/app/src/i18n/mk.ts
+@@ -382,6 +382,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Неподдржан прилог",
+   "prompt.toast.pasteUnsupported.description": "Овде може да се прикачат само слики, PDFs или текстуални датотеки.",
+   "prompt.toast.attachmentDuplicate.title": "Оваа датотека е веќе поставена",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Изберете агент и модел",
+   "prompt.toast.modelAgentRequired.description": "Изберете агент и модел пред да испратите известување.",
+   "prompt.toast.worktreeCreateFailed.title": "Не успеа да се создаде работно дрво",
+diff --git a/packages/app/src/i18n/mn.ts b/packages/app/src/i18n/mn.ts
+index 41c4fa085d..f21ba6aa16 100644
+--- a/packages/app/src/i18n/mn.ts
++++ b/packages/app/src/i18n/mn.ts
+@@ -384,6 +384,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Дэмжигдээгүй хавсралт",
+   "prompt.toast.pasteUnsupported.description": "Энд зөвхөн зураг, PDFс, эсвэл текст файлыг хавсаргах боломжтой.",
+   "prompt.toast.attachmentDuplicate.title": "Энэ файлыг аль хэдийн байршуулсан байна",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Агент болон загварыг сонгоно уу",
+   "prompt.toast.modelAgentRequired.description": "Промпт илгээхээсээ өмнө агент болон загварыг сонгоно уу.",
+   "prompt.toast.worktreeCreateFailed.title": "Git worktree үүсгэж чадсангүй",
+diff --git a/packages/app/src/i18n/ms.ts b/packages/app/src/i18n/ms.ts
+index 2c3783d43b..4a7aa2f055 100644
+--- a/packages/app/src/i18n/ms.ts
++++ b/packages/app/src/i18n/ms.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Lampiran tidak disokong",
+   "prompt.toast.pasteUnsupported.description": "Hanya imej, PDF, atau fail teks boleh dilampirkan di sini.",
+   "prompt.toast.attachmentDuplicate.title": "Fail ini telah dimuat naik",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Pilih ejen dan model",
+   "prompt.toast.modelAgentRequired.description": "Pilih ejen dan model sebelum menghantar prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Gagal mencipta worktree",
+diff --git a/packages/app/src/i18n/my.ts b/packages/app/src/i18n/my.ts
+index 6046f337ff..b0140e34ec 100644
+--- a/packages/app/src/i18n/my.ts
++++ b/packages/app/src/i18n/my.ts
+@@ -385,6 +385,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.description":
+     "ရုပ်ပုံများ၊ PDF များ သို့မဟုတ် စာသားဖိုင်များကိုသာ ဤနေရာတွင် ပူးတွဲနိုင်ပါသည်။",
+   "prompt.toast.attachmentDuplicate.title": "ဤဖိုင်ကို အပ်လုဒ်လုပ်ပြီးပါပြီ။",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "အေးဂျင့်နှင့် မော်ဒယ်ကို ရွေးပါ။",
+   "prompt.toast.modelAgentRequired.description": "Prompt မပို့မီ အေးဂျင့်နှင့် မော်ဒယ်ကို ရွေးပါ။",
+   "prompt.toast.worktreeCreateFailed.title": "Git worktree ဖန်တီး၍မရပါ။",
+diff --git a/packages/app/src/i18n/ne.ts b/packages/app/src/i18n/ne.ts
+index cc60bff9f4..f1a1a6e2f3 100644
+--- a/packages/app/src/i18n/ne.ts
++++ b/packages/app/src/i18n/ne.ts
+@@ -382,6 +382,7 @@ export const dict: Record<string, string> = {
+   "prompt.toast.pasteUnsupported.title": "असमर्थित संलग्नक",
+   "prompt.toast.pasteUnsupported.description": "केवल छविहरू, PDF हरू, वा पाठ फाइलहरू यहाँ संलग्न गर्न सकिन्छ।",
+   "prompt.toast.attachmentDuplicate.title": "यो फाइल पहिले नै अपलोड गरिएको छ",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "एक एजेन्ट र मोडेल चयन गर्नुहोस्",
+   "prompt.toast.modelAgentRequired.description": "प्रम्प्ट पठाउनु अघि एजेन्ट र मोडेल छान्नुहोस्।",
+   "prompt.toast.worktreeCreateFailed.title": "Git वर्कट्री सिर्जना गर्न असफल भयो",
+diff --git a/packages/app/src/i18n/nl.ts b/packages/app/src/i18n/nl.ts
+index 6fb1dc09f2..51898c2619 100644
+--- a/packages/app/src/i18n/nl.ts
++++ b/packages/app/src/i18n/nl.ts
+@@ -382,6 +382,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.description":
+     "Hier kunnen alleen afbeeldingen, pdf's of tekstbestanden worden bijgevoegd.",
+   "prompt.toast.attachmentDuplicate.title": "Dit bestand is al geüpload",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Selecteer een agent en model",
+   "prompt.toast.modelAgentRequired.description": "Kies een agent en model voordat je een prompt verzendt.",
+   "prompt.toast.worktreeCreateFailed.title": "Kan worktree niet maken",
+diff --git a/packages/app/src/i18n/no.ts b/packages/app/src/i18n/no.ts
+index 11958029dc..bfc590bd54 100644
+--- a/packages/app/src/i18n/no.ts
++++ b/packages/app/src/i18n/no.ts
+@@ -398,6 +398,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Ikke støttet vedlegg",
+   "prompt.toast.attachmentDuplicate.title": "Denne filen er allerede lastet opp",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Kun bilder, PDF-er eller tekstfiler kan legges ved her.",
+   "prompt.toast.modelAgentRequired.title": "Velg en agent og modell",
+   "prompt.toast.modelAgentRequired.description": "Velg en agent og modell før du sender en forespørsel.",
+diff --git a/packages/app/src/i18n/pa.ts b/packages/app/src/i18n/pa.ts
+index 6298581c0a..7599533ff5 100644
+--- a/packages/app/src/i18n/pa.ts
++++ b/packages/app/src/i18n/pa.ts
+@@ -388,6 +388,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.description":
+     "ایتھے صرف تصویراں، پی ڈی ایف، یا ٹیکسٹ فائلاں منسلک کیتیاں جا سکدیاں نیں۔",
+   "prompt.toast.attachmentDuplicate.title": "ایہہ فائل پہلے ای اپ لوڈ ہو چکی اے",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "اک ایجنٹ تے ماڈل چنو",
+   "prompt.toast.modelAgentRequired.description": "پرامپٹ بھیجن توں پہلاں اک ایجنٹ تے ماڈل دا انتخاب کرو۔",
+   "prompt.toast.worktreeCreateFailed.title": "ورک ٹری بنان چ ناکامی ہوئی",
+diff --git a/packages/app/src/i18n/pl.ts b/packages/app/src/i18n/pl.ts
+index 9b3c927498..70bcc41dd9 100644
+--- a/packages/app/src/i18n/pl.ts
++++ b/packages/app/src/i18n/pl.ts
+@@ -387,6 +387,7 @@ export const dict = {
+   "prompt.action.stop": "Zatrzymaj",
+   "prompt.toast.pasteUnsupported.title": "Nieobsługiwany załącznik",
+   "prompt.toast.attachmentDuplicate.title": "Ten plik został już przesłany",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Można tutaj załączać tylko obrazy, pliki PDF lub pliki tekstowe.",
+   "prompt.toast.modelAgentRequired.title": "Wybierz agenta i model",
+   "prompt.toast.modelAgentRequired.description": "Wybierz agenta i model przed wysłaniem zapytania.",
+diff --git a/packages/app/src/i18n/ro.ts b/packages/app/src/i18n/ro.ts
+index c84f9a4ee7..42f4cdb3c9 100644
+--- a/packages/app/src/i18n/ro.ts
++++ b/packages/app/src/i18n/ro.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Atașament neacceptat",
+   "prompt.toast.pasteUnsupported.description": "Poți atașa doar imagini, PDF-uri sau fișiere text aici.",
+   "prompt.toast.attachmentDuplicate.title": "Acest fișier a fost deja încărcat",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Selectează un agent și un model",
+   "prompt.toast.modelAgentRequired.description": "Alege un agent și un model înainte de a trimite un prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Nu s-a putut crea worktree-ul",
+diff --git a/packages/app/src/i18n/ru.ts b/packages/app/src/i18n/ru.ts
+index cf4fa8d8f4..645813143b 100644
+--- a/packages/app/src/i18n/ru.ts
++++ b/packages/app/src/i18n/ru.ts
+@@ -406,6 +406,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Неподдерживаемое вложение",
+   "prompt.toast.attachmentDuplicate.title": "Этот файл уже загружен",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Здесь можно прикрепить только изображения, PDF или текстовые файлы.",
+   "prompt.toast.modelAgentRequired.title": "Выберите агента и модель",
+   "prompt.toast.modelAgentRequired.description": "Выберите агента и модель перед отправкой запроса.",
+diff --git a/packages/app/src/i18n/si.ts b/packages/app/src/i18n/si.ts
+index 00ca188b15..8b937ceddd 100644
+--- a/packages/app/src/i18n/si.ts
++++ b/packages/app/src/i18n/si.ts
+@@ -380,6 +380,7 @@ export const dict: Record<string, string> = {
+   "prompt.toast.pasteUnsupported.title": "සහාය නොදක්වන ඇමුණුම",
+   "prompt.toast.pasteUnsupported.description": "පින්තූර, PDF හෝ පෙළ ගොනු පමණක් මෙහි ඇමිණිය හැක.",
+   "prompt.toast.attachmentDuplicate.title": "මෙම ගොනුව දැනටමත් උඩුගත කර ඇත",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "නියෝජිතයෙකු සහ ආකෘතියක් තෝරන්න",
+   "prompt.toast.modelAgentRequired.description": "ප්‍රොම්ප්ට් එකක් යැවීමට පෙර නියෝජිතයෙකු සහ ආකෘතියක් තෝරන්න.",
+   "prompt.toast.worktreeCreateFailed.title": "Git වර්ක්ට්‍රී එකක් සෑදීමට අසමත් විය",
+diff --git a/packages/app/src/i18n/sk.ts b/packages/app/src/i18n/sk.ts
+index 9992e06cc4..3aef10767c 100644
+--- a/packages/app/src/i18n/sk.ts
++++ b/packages/app/src/i18n/sk.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Nepodporovaná príloha",
+   "prompt.toast.pasteUnsupported.description": "Pripojiť možno len obrázky, PDF alebo textové súbory.",
+   "prompt.toast.attachmentDuplicate.title": "Tento súbor už bol nahraný",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Vyberte agenta a model",
+   "prompt.toast.modelAgentRequired.description": "Pred odoslaním výzvy vyberte agenta a model.",
+   "prompt.toast.worktreeCreateFailed.title": "Nepodarilo sa vytvoriť pracovný strom",
+diff --git a/packages/app/src/i18n/sl.ts b/packages/app/src/i18n/sl.ts
+index 3c23fcd7f7..68ab0590fc 100644
+--- a/packages/app/src/i18n/sl.ts
++++ b/packages/app/src/i18n/sl.ts
+@@ -380,6 +380,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Nepodprta priloga",
+   "prompt.toast.pasteUnsupported.description": "Sem lahko priložite samo slike, datoteke PDF ali besedilne datoteke.",
+   "prompt.toast.attachmentDuplicate.title": "Ta datoteka je že naložena",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Izberite agenta in model",
+   "prompt.toast.modelAgentRequired.description": "Preden pošljete poziv, izberite agenta in model.",
+   "prompt.toast.worktreeCreateFailed.title": "Delovnega drevesa ni bilo mogoče ustvariti",
+diff --git a/packages/app/src/i18n/sq.ts b/packages/app/src/i18n/sq.ts
+index ca94793ab0..8f7ca8c596 100644
+--- a/packages/app/src/i18n/sq.ts
++++ b/packages/app/src/i18n/sq.ts
+@@ -382,6 +382,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.description":
+     "Këtu mund të bashkëngjiten vetëm imazhe, skedarë PDF ose skedarë teksti.",
+   "prompt.toast.attachmentDuplicate.title": "Ky skedar tashmë është ngarkuar",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Zgjidhni një agjent dhe model",
+   "prompt.toast.modelAgentRequired.description": "Zgjidhni një agjent dhe model përpara se të dërgoni një kërkesë.",
+   "prompt.toast.worktreeCreateFailed.title": "Krijimi i pemës së punës dështoi",
+diff --git a/packages/app/src/i18n/sr.ts b/packages/app/src/i18n/sr.ts
+index f059160087..99a5ddbb3b 100644
+--- a/packages/app/src/i18n/sr.ts
++++ b/packages/app/src/i18n/sr.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Неподржани прилог",
+   "prompt.toast.pasteUnsupported.description": "Овде се могу приложити само слике, PDFс или текстуалне датотеке.",
+   "prompt.toast.attachmentDuplicate.title": "Ова датотека је већ отпремљена",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Изаберите агента и модел",
+   "prompt.toast.modelAgentRequired.description": "Одаберите агента и модел пре него што пошаљете упит.",
+   "prompt.toast.worktreeCreateFailed.title": "Креирање радног стабла није успело",
+diff --git a/packages/app/src/i18n/sv.ts b/packages/app/src/i18n/sv.ts
+index 39b363c6b6..039cb2ed67 100644
+--- a/packages/app/src/i18n/sv.ts
++++ b/packages/app/src/i18n/sv.ts
+@@ -382,6 +382,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Bilaga som inte stöds",
+   "prompt.toast.pasteUnsupported.description": "Endast bilder, PDF-filer eller textfiler kan bifogas här.",
+   "prompt.toast.attachmentDuplicate.title": "Den här filen har redan laddats upp",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Välj en agent och modell",
+   "prompt.toast.modelAgentRequired.description": "Välj en agent och modell innan du skickar en prompt.",
+   "prompt.toast.worktreeCreateFailed.title": "Det gick inte att skapa worktree",
+diff --git a/packages/app/src/i18n/tg.ts b/packages/app/src/i18n/tg.ts
+index ffa08409f6..cf209c7555 100644
+--- a/packages/app/src/i18n/tg.ts
++++ b/packages/app/src/i18n/tg.ts
+@@ -383,6 +383,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.description":
+     "Дар ин ҷо танҳо тасвирҳо, PDFс ё файлҳои матнӣ замима кардан мумкин аст.",
+   "prompt.toast.attachmentDuplicate.title": "Ин файл аллакай бор карда шудааст",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Агент ва моделро интихоб кунед",
+   "prompt.toast.modelAgentRequired.description": "Пеш аз фиристодани промпт агент ва моделро интихоб кунед.",
+   "prompt.toast.worktreeCreateFailed.title": "Эҷоди Git worktree муяссар нашуд",
+diff --git a/packages/app/src/i18n/th.ts b/packages/app/src/i18n/th.ts
+index 1a0e9db72b..264c91262a 100644
+--- a/packages/app/src/i18n/th.ts
++++ b/packages/app/src/i18n/th.ts
+@@ -405,6 +405,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "ไฟล์แนบที่ไม่รองรับ",
+   "prompt.toast.attachmentDuplicate.title": "ไฟล์นี้ถูกอัปโหลดแล้ว",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "แนบได้เฉพาะรูปภาพ PDF หรือไฟล์ข้อความเท่านั้น",
+   "prompt.toast.modelAgentRequired.title": "เลือกเอเจนต์และโมเดล",
+   "prompt.toast.modelAgentRequired.description": "เลือกเอเจนต์และโมเดลก่อนส่งพรอมต์",
+diff --git a/packages/app/src/i18n/tk.ts b/packages/app/src/i18n/tk.ts
+index 2b144c6a26..826ec0836d 100644
+--- a/packages/app/src/i18n/tk.ts
++++ b/packages/app/src/i18n/tk.ts
+@@ -381,6 +381,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Goldaw berilmeýän goşundy",
+   "prompt.toast.pasteUnsupported.description": "Bu ýerde diňe suratlar, PDF ýa-da tekst faýllary birikdirilip bilner.",
+   "prompt.toast.attachmentDuplicate.title": "Bu faýl eýýäm ýüklendi",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Agent we model saýlaň",
+   "prompt.toast.modelAgentRequired.description": "Sorag ibermezden ozal agent we model saýlaň.",
+   "prompt.toast.worktreeCreateFailed.title": "Git worktree döredip bolmady",
+diff --git a/packages/app/src/i18n/tr.ts b/packages/app/src/i18n/tr.ts
+index 85623036e4..f2f23d2946 100644
+--- a/packages/app/src/i18n/tr.ts
++++ b/packages/app/src/i18n/tr.ts
+@@ -412,6 +412,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Desteklenmeyen ek",
+   "prompt.toast.attachmentDuplicate.title": "Bu dosya zaten yüklendi",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Buraya yalnızca resimler, PDF'ler veya metin dosyaları eklenebilir.",
+   "prompt.toast.modelAgentRequired.title": "Bir ajan ve model seçin",
+   "prompt.toast.modelAgentRequired.description": "İstem göndermeden önce bir ajan ve model seçin.",
+diff --git a/packages/app/src/i18n/uk.ts b/packages/app/src/i18n/uk.ts
+index 54732a87b7..58db70ff33 100644
+--- a/packages/app/src/i18n/uk.ts
++++ b/packages/app/src/i18n/uk.ts
+@@ -409,6 +409,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "Непідтримуване вкладення",
+   "prompt.toast.attachmentDuplicate.title": "Цей файл уже завантажено",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "Сюди можна прикріплювати лише зображення, PDF або текстові файли.",
+   "prompt.toast.modelAgentRequired.title": "Виберіть агента та модель",
+   "prompt.toast.modelAgentRequired.description": "Виберіть агента та модель перед надсиланням запиту.",
+diff --git a/packages/app/src/i18n/ur.ts b/packages/app/src/i18n/ur.ts
+index 2ab69e7aec..2a8c6f71bd 100644
+--- a/packages/app/src/i18n/ur.ts
++++ b/packages/app/src/i18n/ur.ts
+@@ -390,6 +390,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "غیر تعاون یافتہ منسلکہ",
+   "prompt.toast.pasteUnsupported.description": "یہاں صرف تصاویر، PDFs، یا ٹیکسٹ فائلیں منسلک کی جا سکتی ہیں۔",
+   "prompt.toast.attachmentDuplicate.title": "یہ فائل پہلے ہی اپ لوڈ ہو چکی ہے",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "ایک ایجنٹ اور ماڈل منتخب کریں۔",
+   "prompt.toast.modelAgentRequired.description": "پرامپٹ بھیجنے سے پہلے ایک ایجنٹ اور ماڈل کا انتخاب کریں۔",
+   "prompt.toast.worktreeCreateFailed.title": "ورک ٹری بنانے میں ناکام",
+diff --git a/packages/app/src/i18n/uz.ts b/packages/app/src/i18n/uz.ts
+index 8cb7097fc0..4f86513d6a 100644
+--- a/packages/app/src/i18n/uz.ts
++++ b/packages/app/src/i18n/uz.ts
+@@ -383,6 +383,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Qoʻllab-quvvatlanmaydigan biriktirma",
+   "prompt.toast.pasteUnsupported.description": "Bu yerda faqat rasmlar, PDF yoki matnli fayllar biriktirilishi mumkin.",
+   "prompt.toast.attachmentDuplicate.title": "Bu fayl allaqachon yuklangan",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Agent va modelni tanlang",
+   "prompt.toast.modelAgentRequired.description": "So'rov yuborishdan oldin agent va modelni tanlang.",
+   "prompt.toast.worktreeCreateFailed.title": "Ish daraxtini yaratib boʻlmadi",
+diff --git a/packages/app/src/i18n/vi.ts b/packages/app/src/i18n/vi.ts
+index 06fda4ce70..e93a8e431e 100644
+--- a/packages/app/src/i18n/vi.ts
++++ b/packages/app/src/i18n/vi.ts
+@@ -388,6 +388,7 @@ export const dict = {
+   "prompt.toast.pasteUnsupported.title": "Tệp đính kèm không được hỗ trợ",
+   "prompt.toast.pasteUnsupported.description": "Chỉ có thể đính kèm hình ảnh, tệp PDF hoặc tệp văn bản ở đây.",
+   "prompt.toast.attachmentDuplicate.title": "Tệp này đã được tải lên",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.modelAgentRequired.title": "Chọn tác nhân và mô hình",
+   "prompt.toast.modelAgentRequired.description": "Chọn một tác nhân và mô hình trước khi gửi lời nhắc.",
+   "prompt.toast.worktreeCreateFailed.title": "Không tạo được worktree",
+diff --git a/packages/app/src/i18n/zh.ts b/packages/app/src/i18n/zh.ts
+index b0ba045347..3e90ac6af1 100644
+--- a/packages/app/src/i18n/zh.ts
++++ b/packages/app/src/i18n/zh.ts
+@@ -424,6 +424,7 @@ export const dict = {
+   "prompt.action.stop": "停止",
+   "prompt.toast.pasteUnsupported.title": "不支持的附件",
+   "prompt.toast.attachmentDuplicate.title": "此文件已上传",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "此处仅能附加图片、PDF 或文本文件。",
+   "prompt.toast.modelAgentRequired.title": "请选择智能体和模型",
+   "prompt.toast.modelAgentRequired.description": "发送提示前请先选择智能体和模型。",
+diff --git a/packages/app/src/i18n/zht.ts b/packages/app/src/i18n/zht.ts
+index 6cc3d55528..182f82bd8d 100644
+--- a/packages/app/src/i18n/zht.ts
++++ b/packages/app/src/i18n/zht.ts
+@@ -405,6 +405,7 @@ export const dict = {
+ 
+   "prompt.toast.pasteUnsupported.title": "不支援的附件",
+   "prompt.toast.attachmentDuplicate.title": "此檔案已上傳",
++  "prompt.toast.heicConverting.title": "Converting HEIC photo to JPEG…",
+   "prompt.toast.pasteUnsupported.description": "此處僅能附加圖片、PDF 或文字檔案。",
+   "prompt.toast.modelAgentRequired.title": "請選擇代理程式和模型",
+   "prompt.toast.modelAgentRequired.description": "傳送提示前請先選擇代理程式和模型。",

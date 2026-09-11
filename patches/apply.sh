@@ -15,7 +15,8 @@
 # + mobile-landscape-theater added 2026-09-05,
 # + heic-images added 2026-09-11,
 # + heic-images-v2 added 2026-09-11,
-# + heic-images-csp added 2026-09-11 (37 total)):
+# + heic-images-csp added 2026-09-11,
+# + heic-converting-toast added 2026-09-11 (38 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -211,8 +212,19 @@
 #       added to the existing embedded-UI CSP test. Implementer: Muse Spark.
 #       Applies after #31 (same file, disjoint hunks); otherwise order-independent.
 #
+#   38. heic-converting-toast.patch (local) - progress toast for HEIC conversion:
+#       conversion takes ~1s with no feedback, so both attach cores (v1 + v2)
+#       now take a notify(converting) callback fired around the convert
+#       (try/finally, so failure also clears it) and both composers show a
+#       "Converting HEIC photo to JPEG…" toast on start and dismiss it on
+#       completion (1 new i18n key, interim English in all 62 locales).
+#       5 new unit tests (start/stop sequence incl. failure path, silence for
+#       non-HEIC). Implementer: Muse Spark.
+#       Applies after #35+#36 (same regions, derived as diff against the
+#       #35/#36-applied state); otherwise order-independent.
+#
 # IMPLEMENTERS (model that wrote each patch; #1-32 predate attribution):
-#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark; #36 Muse Spark; #37 Muse Spark; all others unknown.
+#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark; #36 Muse Spark; #37 Muse Spark; #38 Muse Spark; all others unknown.
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
@@ -280,6 +292,7 @@ PATCH_NAMES=(
   heic-images
   heic-images-v2
   heic-images-csp
+  heic-converting-toast
 )
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"
