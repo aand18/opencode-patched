@@ -182,9 +182,10 @@
 #       file-input accept string); (b) convert HEIC -> JPEG at attach time in
 #       both composers via lazily-imported heic2any (WASM libheif,
 #       browser-only, zero cost to non-HEIC users; first frame of multi-image
-#       containers; output capped at 2000px to match the server resizer, so
-#       big phone photos skip most encode/upload work; failure falls back to
-#       the existing unsupported toast); the dynamic import is resolved
+#       containers; JPEG quality 0.95 with high-quality canvas smoothing;
+#       output capped at 2000px to match the server resizer, so big phone
+#       photos skip most encode/upload work; failure falls back to the
+#       existing unsupported toast); the dynamic import is resolved
 #       defensively (bundlers may nest it as {h:{default}} instead of a
 #       top-level default); (c) served CSP gains `worker-src 'self' blob:`
 #       (heic2any decodes in a blob-URL worker that script-src blocked) and

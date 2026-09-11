@@ -131,7 +131,7 @@ index 6f3ef57c66..93ec440b6c 100644
  
    const handleGlobalDragOver = (event: DragEvent) => {
 diff --git a/packages/app/src/components/prompt-input/attachments.test.ts b/packages/app/src/components/prompt-input/attachments.test.ts
-index 104921697d..3d6980a613 100644
+index 104921697d..99a15ee00c 100644
 --- a/packages/app/src/components/prompt-input/attachments.test.ts
 +++ b/packages/app/src/components/prompt-input/attachments.test.ts
 @@ -1,5 +1,16 @@
@@ -359,7 +359,7 @@ index 104921697d..3d6980a613 100644
  })
  
  describe("pickAttachmentFiles", () => {
-@@ -106,3 +317,112 @@ describe("pasteMode", () => {
+@@ -106,3 +317,130 @@ describe("pasteMode", () => {
      expect(pasteMode("x".repeat(8000))).toBe("manual")
    })
  })
@@ -382,6 +382,8 @@ index 104921697d..3d6980a613 100644
 +    const previousBitmap = (globalThis as Record<string, unknown>).createImageBitmap
 +    const previousDocument = (globalThis as Record<string, unknown>).document
 +    const downsized = new Blob(["small"], { type: "image/jpeg" })
++    const drawn: string[] = []
++    let encodeQuality: number | undefined
 +    ;(globalThis as Record<string, unknown>).createImageBitmap = async () => ({
 +      width: 4000,
 +      height: 3000,
@@ -391,8 +393,21 @@ index 104921697d..3d6980a613 100644
 +      createElement: () => ({
 +        width: 0,
 +        height: 0,
-+        getContext: () => ({ drawImage: () => undefined }),
-+        toBlob: (callback: (blob: Blob | null) => void) => callback(downsized),
++        getContext: () => ({
++          drawImage: () => {
++            drawn.push("drawImage")
++          },
++          set imageSmoothingEnabled(value: boolean) {
++            drawn.push(`smoothingEnabled=${value}`)
++          },
++          set imageSmoothingQuality(value: string) {
++            drawn.push(`smoothingQuality=${value}`)
++          },
++        }),
++        toBlob: (callback: (blob: Blob | null) => void, _type?: string, quality?: number) => {
++          encodeQuality = quality
++          callback(downsized)
++        },
 +      }),
 +    }
 +    try {
@@ -400,6 +415,9 @@ index 104921697d..3d6980a613 100644
 +      expect(converted.type).toBe("image/jpeg")
 +      expect(converted.name).toBe("big.jpg")
 +      expect(await converted.text()).toBe("small")
++      expect(drawn).toContain("smoothingEnabled=true")
++      expect(drawn).toContain("smoothingQuality=high")
++      expect(encodeQuality).toBeGreaterThanOrEqual(0.95)
 +    } finally {
 +      if (previousBitmap === undefined) delete (globalThis as Record<string, unknown>).createImageBitmap
 +      else (globalThis as Record<string, unknown>).createImageBitmap = previousBitmap
@@ -504,7 +522,7 @@ index 481b7922cf..dcde3387af 100644
          showToast({
            variant: "error",
 diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
-index 89f38ec4a3..2653ca092a 100644
+index 89f38ec4a3..227ba95128 100644
 --- a/packages/session-ui/src/v2/components/prompt-input/attachments.ts
 +++ b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
 @@ -1,5 +1,6 @@
@@ -624,7 +642,7 @@ index 89f38ec4a3..2653ca092a 100644
    const type = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""
    if (imageMimes.has(type) || type === "application/pdf") return type
    const index = file.name.lastIndexOf(".")
-@@ -261,6 +293,101 @@ async function attachmentMime(file: File) {
+@@ -261,6 +293,108 @@ async function attachmentMime(file: File) {
    return "text/plain"
  }
  
@@ -651,7 +669,7 @@ index 89f38ec4a3..2653ca092a 100644
 +  const mod = await import("heic2any")
 +  const heic2any = resolveHeicConverter(mod)
 +  if (!heic2any) throw new Error("HEIC converter unavailable")
-+  return heic2any({ blob: input.blob, toType: "image/jpeg", quality: 0.92 })
++  return heic2any({ blob: input.blob, toType: "image/jpeg", quality: HEIC_JPEG_QUALITY })
 +}
 +
 +export function resolveHeicConverter(mod: unknown, seen: Set<unknown> = new Set()): HeicConverter | undefined {
@@ -680,6 +698,11 @@ index 89f38ec4a3..2653ca092a 100644
 +// larger only wastes encode + upload time on big phone photos.
 +const CONVERTED_MAX_SIZE = 2000
 +
++// JPEG quality for HEIC conversions. High enough that the double lossy
++// chain (HEIC -> JPEG here, possible server re-encode) stays visually
++// clean; the 2000px cap above is what keeps byte size in check, not this.
++const HEIC_JPEG_QUALITY = 0.95
++
 +export function fitWithin(width: number, height: number, max: number) {
 +  if (width <= max && height <= max) return { width, height }
 +  const scale = Math.min(max / width, max / height)
@@ -698,8 +721,10 @@ index 89f38ec4a3..2653ca092a 100644
 +      canvas.height = size.height
 +      const context = canvas.getContext("2d")
 +      if (!context) return blob
++      context.imageSmoothingEnabled = true
++      context.imageSmoothingQuality = "high"
 +      context.drawImage(bitmap, 0, 0, size.width, size.height)
-+      const output = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92))
++      const output = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", HEIC_JPEG_QUALITY))
 +      return output ?? blob
 +    } finally {
 +      bitmap.close?.()
@@ -770,10 +795,10 @@ index 1a7ccc60da..48aee915e2 100644
 diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
 new file mode 100644
 new file mode 100644
-index 0000000000..bde1f80c06
+index 0000000000..a08534b91c
 --- /dev/null
 +++ b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,354 @@
 +import { describe, expect, test } from "bun:test"
 +import { createRoot } from "solid-js"
 +import {
@@ -1020,6 +1045,8 @@ index 0000000000..bde1f80c06
 +    const previousBitmap = (globalThis as Record<string, unknown>).createImageBitmap
 +    const previousDocument = (globalThis as Record<string, unknown>).document
 +    const downsized = new Blob(["small"], { type: "image/jpeg" })
++    const drawn: string[] = []
++    let encodeQuality: number | undefined
 +    ;(globalThis as Record<string, unknown>).createImageBitmap = async () => ({
 +      width: 4000,
 +      height: 3000,
@@ -1029,8 +1056,21 @@ index 0000000000..bde1f80c06
 +      createElement: () => ({
 +        width: 0,
 +        height: 0,
-+        getContext: () => ({ drawImage: () => undefined }),
-+        toBlob: (callback: (blob: Blob | null) => void) => callback(downsized),
++        getContext: () => ({
++          drawImage: () => {
++            drawn.push("drawImage")
++          },
++          set imageSmoothingEnabled(value: boolean) {
++            drawn.push(`smoothingEnabled=${value}`)
++          },
++          set imageSmoothingQuality(value: string) {
++            drawn.push(`smoothingQuality=${value}`)
++          },
++        }),
++        toBlob: (callback: (blob: Blob | null) => void, _type?: string, quality?: number) => {
++          encodeQuality = quality
++          callback(downsized)
++        },
 +      }),
 +    }
 +    try {
@@ -1038,6 +1078,9 @@ index 0000000000..bde1f80c06
 +      expect(converted.type).toBe("image/jpeg")
 +      expect(converted.name).toBe("big.jpg")
 +      expect(await converted.text()).toBe("small")
++      expect(drawn).toContain("smoothingEnabled=true")
++      expect(drawn).toContain("smoothingQuality=high")
++      expect(encodeQuality).toBeGreaterThanOrEqual(0.95)
 +    } finally {
 +      if (previousBitmap === undefined) delete (globalThis as Record<string, unknown>).createImageBitmap
 +      else (globalThis as Record<string, unknown>).createImageBitmap = previousBitmap
