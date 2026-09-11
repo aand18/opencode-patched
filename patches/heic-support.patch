@@ -726,6 +726,19 @@ index 89f38ec4a3..2653ca092a 100644
  function cursorPosition(editor: HTMLElement) {
    const selection = window.getSelection()
    if (!selection || selection.rangeCount === 0) return 0
+diff --git a/packages/session-ui/src/v2/components/prompt-input/interaction.ts b/packages/session-ui/src/v2/components/prompt-input/interaction.ts
+index f4a9fa74b7..5f4ccb64d7 100644
+--- a/packages/session-ui/src/v2/components/prompt-input/interaction.ts
++++ b/packages/session-ui/src/v2/components/prompt-input/interaction.ts
+@@ -2,6 +2,8 @@ import { createEffect, on, type Accessor } from "solid-js"
+ import { createStore, reconcile } from "solid-js/store"
+ import { useFilteredList } from "@opencode-ai/ui/hooks"
+ import { createPromptInputV2Attachments, type PromptInputV2AttachmentConfig } from "./attachments"
++
++export { createConvertingNotify } from "./attachments"
+ import { createPromptInputV2Store, type PromptInputV2StoreInput } from "./store"
+ import type {
+   PromptInputV2Attachment,
 diff --git a/packages/opencode/src/server/shared/ui.ts b/packages/opencode/src/server/shared/ui.ts
 index d3f2c45113..4f2bdc7bea 100644
 --- a/packages/opencode/src/server/shared/ui.ts
@@ -754,23 +767,10 @@ index 1a7ccc60da..48aee915e2 100644
        expect(csp).toContain("connect-src * data: blob:")
      }),
    )
-diff --git a/packages/session-ui/src/v2/components/prompt-input/interaction.ts b/packages/session-ui/src/v2/components/prompt-input/interaction.ts
-index f4a9fa74b7..5f4ccb64d7 100644
---- a/packages/session-ui/src/v2/components/prompt-input/interaction.ts
-+++ b/packages/session-ui/src/v2/components/prompt-input/interaction.ts
-@@ -2,6 +2,8 @@ import { createEffect, on, type Accessor } from "solid-js"
- import { createStore, reconcile } from "solid-js/store"
- import { useFilteredList } from "@opencode-ai/ui/hooks"
- import { createPromptInputV2Attachments, type PromptInputV2AttachmentConfig } from "./attachments"
-+
-+export { createConvertingNotify } from "./attachments"
- import { createPromptInputV2Store, type PromptInputV2StoreInput } from "./store"
- import type {
-   PromptInputV2Attachment,
 diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
 new file mode 100644
-index 0000000000..bde1f80c06
 new file mode 100644
+index 0000000000..bde1f80c06
 --- /dev/null
 +++ b/packages/session-ui/src/v2/components/prompt-input/attachments.test.ts
 @@ -0,0 +1,336 @@
