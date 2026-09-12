@@ -201,8 +201,32 @@
 #       the decoder (the model reads pixels only); orientation is baked into
 #       pixels. 44 unit tests (converters behind injectable seams) + 2 CSP
 #       assertions. Unified 2026-09-11 from heic-images + heic-images-v2 +
-#       heic-images-csp + heic-converting-toast (proven equivalent: unified
-#       applies clean on 1-34 and reproduces the working tree content).
+#       heic-images-csp + heic-converting-toast. Re-cut 2026-09-12: added the
+#       missing files.ts hunks (v1 HEIC whitelist + converter core + 2000px
+#       cap that quality tuning landed in the working tree after the original
+#       cut — fresh trees 1-35+build would have failed on the v1 import);
+#       fresh-tree apply of 1-35 now reproduces all 12 touched files
+#       byte-for-byte (CR-insensitive; bun.lock/session-ui diffs were pure
+#       autocrlf checkout noise).
+#       Downscale resampler gallery measured 2026-09-12 (2400x1600 test
+#       chart -> 600x400, 3x-zoom crops of text/grid/circle zones; browser
+#       canvas A/A2/B vs photon-node Lanczos3/CatmullRom/Triangle C/D/E;
+#       metrics = 4-neighbor Laplacian variance + RMS vs Lanczos3):
+#       single-step canvas with smoothing OFF aliases badly (grid shatters
+#       into dashes, small text illegible; RMS 22-33, and its high Laplacian
+#       variance is aliasing, not sharpness); single-step with smoothing=high
+#       is BYTE-IDENTICAL to multi-step halving in Chrome (all crop metrics
+#       equal), so the halving trick adds nothing and was NOT adopted;
+#       canvas-high sits close to the photon references (grid RMS 14 vs
+#       CatmullRom 2.3, text RMS 8.3 vs 1.7 — sharp with mild contrast
+#       overshoot, no blur); photon Triangle blurrier than all (RMS 4-6,
+#       lowest Laplacian variance). Verdict: keep single-step +
+#       smoothing=high — ~CatmullRom legibility at zero deps; pica/photon
+#       reserved for future if a visible gap ever appears.
+#       Live pipeline (12.2MP synthetic HEIC 4032x3024): heic2any default
+#       PNG 1011KB vs patched jpeg q0.95 + 2000px canvas cap = 234KB
+#       (4.3x smaller, skips server re-encode); end-to-end on test server:
+#       persistent toast captured, preview 2000x1500 JPEG, 0 console errors.
 #       Implementer: Muse Spark.
 #       Applies after #31 (shared server/shared/ui.ts, disjoint hunks);
 #       otherwise order-independent.

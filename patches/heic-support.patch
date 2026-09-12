@@ -490,6 +490,125 @@ index 104921697d..99a15ee00c 100644
 +    expect(dismissed).toEqual([1, 2])
 +  })
 +})
+diff --git a/packages/app/src/components/prompt-input/files.ts b/packages/app/src/components/prompt-input/files.ts
+index 3c6ad1ff08..bdf414b0c4 100644
+--- a/packages/app/src/components/prompt-input/files.ts
++++ b/packages/app/src/components/prompt-input/files.ts
+@@ -35,8 +35,11 @@ export function pickAttachmentFiles(input: {
+ }
+ 
+ const IMAGE_MIMES = new Set(ACCEPTED_IMAGE_TYPES)
++const HEIC_MIMES = new Set(["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"])
+ const IMAGE_EXTS = new Map([
+   ["gif", "image/gif"],
++  ["heic", "image/heic"],
++  ["heif", "image/heif"],
+   ["jpeg", "image/jpeg"],
+   ["jpg", "image/jpeg"],
+   ["png", "image/png"],
+@@ -96,3 +99,102 @@ export async function attachmentMime(file: File) {
+   if (!textBytes(bytes)) return
+   return "text/plain"
+ }
++
++export function isHeicFile(file: File) {
++  if (HEIC_MIMES.has(kind(file.type))) return true
++  const suffix = ext(file.name)
++  return suffix === "heic" || suffix === "heif"
++}
++
++export type HeicConverter = (input: { blob: Blob; toType?: string; quality?: number }) => Promise<Blob | Blob[]>
++
++let heicConverter: HeicConverter | undefined
++
++export function setHeicConverterForTests(converter: HeicConverter | undefined) {
++  heicConverter = converter
++}
++
++async function defaultHeicConverter(input: { blob: Blob }) {
++  // Browser-only: heic2any touches window/Worker at import time, so this
++  // must stay a lazy import on the attach path, never a static import.
++  const mod = await import("heic2any")
++  const heic2any = resolveHeicConverter(mod)
++  if (!heic2any) throw new Error("HEIC converter unavailable")
++  return heic2any({ blob: input.blob, toType: "image/jpeg", quality: HEIC_JPEG_QUALITY })
++}
++
++export function resolveHeicConverter(mod: unknown, seen: Set<unknown> = new Set()): HeicConverter | undefined {
++  if (typeof mod === "function") return mod as HeicConverter
++  if (!mod || typeof mod !== "object" || seen.has(mod)) return undefined
++  seen.add(mod)
++  for (const value of Object.values(mod)) {
++    const found = resolveHeicConverter(value, seen)
++    if (found) return found
++  }
++  return undefined
++}
++
++export async function convertHeicToJpeg(file: File) {
++  const convert = heicConverter ?? defaultHeicConverter
++  const result = await convert({ blob: file })
++  const blob = Array.isArray(result) ? result[0] : result
++  if (!blob) throw new Error("HEIC conversion produced no images")
++  const resized = await downscaleIfNeeded(blob)
++  const base = file.name.includes(".") ? file.name.slice(0, file.name.lastIndexOf(".")) : file.name
++  return new File([resized], `${base || "photo"}.jpg`, { type: "image/jpeg" })
++}
++
++// Matches the server image resizer limits (opencode image.normalize
++// MAX_WIDTH/MAX_HEIGHT): the model never sees more than this, so sending
++// larger only wastes encode + upload time on big phone photos.
++const CONVERTED_MAX_SIZE = 2000
++
++// JPEG quality for HEIC conversions. High enough that the double lossy
++// chain (HEIC -> JPEG here, possible server re-encode) stays visually
++// clean; the 2000px cap above is what keeps byte size in check, not this.
++const HEIC_JPEG_QUALITY = 0.95
++
++export function fitWithin(width: number, height: number, max: number) {
++  if (width <= max && height <= max) return { width, height }
++  const scale = Math.min(max / width, max / height)
++  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) }
++}
++
++async function downscaleIfNeeded(blob: Blob) {
++  try {
++    if (typeof createImageBitmap === "undefined" || typeof document === "undefined") return blob
++    const bitmap = await createImageBitmap(blob)
++    try {
++      const size = fitWithin(bitmap.width, bitmap.height, CONVERTED_MAX_SIZE)
++      if (size.width === bitmap.width && size.height === bitmap.height) return blob
++      const canvas = document.createElement("canvas")
++      canvas.width = size.width
++      canvas.height = size.height
++      const context = canvas.getContext("2d")
++      if (!context) return blob
++      context.imageSmoothingEnabled = true
++      context.imageSmoothingQuality = "high"
++      context.drawImage(bitmap, 0, 0, size.width, size.height)
++      const output = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", HEIC_JPEG_QUALITY))
++      return output ?? blob
++    } finally {
++      bitmap.close?.()
++    }
++  } catch {
++    return blob
++  }
++}
++
++export function createConvertingNotify(show: () => number, dismiss: (id: number) => void) {
++  let id: number | undefined
++  return (converting: boolean) => {
++    if (converting) {
++      id = show()
++      return
++    }
++    if (id !== undefined) {
++      dismiss(id)
++      id = undefined
++    }
++  }
++}
 diff --git a/packages/app/src/components/prompt-input-v2.tsx b/packages/app/src/components/prompt-input-v2.tsx
 index 481b7922cf..dcde3387af 100644
 --- a/packages/app/src/components/prompt-input-v2.tsx
