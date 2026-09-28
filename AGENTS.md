@@ -6,9 +6,9 @@
 
 **CRITICAL:** Default bash workdir is `/home/dev/opencode-patched` (patches repo). All opencode-src git commands MUST use `workdir="/home/dev/opencode-patched/opencode-src"` to avoid accidentally resetting the wrong repo.
 
-**Build:** `OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
+**Build:** `OPENCODE_VERSION=1.18.32 OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
 - **Fast path (local iteration): append `--single`** — builds only the current platform (`opencode-linux-x64`) instead of all 12 targets. Verified 2026-08-30: ~29 s vs ~5 min for the full build, smoke test included. Use for patch iteration; the full multi-target build is only needed for release/publishing. Optional extra: `--skip-install` additionally skips the cross-platform `bun install --os="*"` steps — only safe when dependencies have not changed since the last `bun install`.
-- `OPENCODE_VERSION` MUST be set to a version that exists on npm (e.g., `1.18.21`), otherwise plugin dependency resolution will fail: `@opencode-ai/plugin@0.0.0-prod-...` 404s on npm.
+- `OPENCODE_VERSION` MUST be set to a version that exists on npm (e.g., `1.18.32`), otherwise plugin dependency resolution will fail: `@opencode-ai/plugin@0.0.0-prod-...` 404s on npm.
 - After switching to a new release tag, run `bun install` first — v1.18.15+ vendors `@opencode-ai/client` as a tarball (`packages/app/vendor/`), and without it the app build fails on `@opencode-ai/client/promise` resolution.
 - Without `OPENCODE_CHANNEL=prod`, channel defaults to git branch name (non-prod), which defaults the new UI layout to `true` and hides the old UI toggle.
 - Binary output: `packages/opencode/dist/opencode-linux-x64/bin/opencode`
@@ -19,7 +19,7 @@
 2. Backup database with sqlite online backup API (plain `cp` MISSES the WAL tail — verified 2026-08-09: cp-backed .bak was 50 messages/12 min stale while live db is in WAL mode): `sqlite3 ~/.local/share/opencode/opencode.db ".backup $HOME/.local/share/opencode/opencode.db.bak.{TIMESTAMP}"` (note: sqlite3 does NOT expand `~` in the .backup target; use `$HOME` or absolute path)
 
 **Dev (no build):** run the patched source directly — no binary build needed for testing changes/patches. `./dev-serve.sh` (repo root) mirrors the built binary: same env (`OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`) + `serve --hostname 0.0.0.0 --port 4096 --mdns`. Edit a file → `Ctrl-C` → rerun.
-- Command is `bun --conditions=browser --define 'OPENCODE_VERSION="1.18.21"' --define 'OPENCODE_CHANNEL="prod"' <src>/packages/opencode/src/index.ts serve …`. Run the file **directly** (`bun [flags] file.ts`), not `bun run file.ts` — `--define` is not a `bun run` subcommand flag (it prints usage and exits).
+- Command is `bun --conditions=browser --define 'OPENCODE_VERSION="1.18.32"' --define 'OPENCODE_CHANNEL="prod"' <src>/packages/opencode/src/index.ts serve …`. Run the file **directly** (`bun [flags] file.ts`), not `bun run file.ts` — `--define` is not a `bun run` subcommand flag (it prints usage and exits).
 - The `--define` flags mirror the prod binary (source otherwise falls back to `version="local"`, `channel="local"`); keep `channel=prod` or the new-UI layout default flips.
 - **Web UI:** source mode proxies it from `https://app.opencode.ai` — the embedded `opencode-web-ui.gen.ts` only resolves under `Bun.build` (a no-`./` import specifier). Fine for backend/patch testing (UI still hits your patched API); run `bun run dev:web` (Vite) separately for the patched UI. The backend's own port therefore never shows local session-ui/app changes — always verify UI patches in the Vite dev UI.
 - `OPENCODE_MODELS_DEV` is unset at source, so the first model-list load fetches `models.opencode.ai` (5-min cache under `Global.Path.cache`).
@@ -51,7 +51,7 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 Roll forward to a new upstream release:
 1. Fetch new tag into opencode-src (detached HEAD at tag; create local tag from FETCH_HEAD)
 2. Run `bun install` (v1.18.15+ vendors `@opencode-ai/client` tarball)
-3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (34/34 at v1.18.21)
+3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (37/37 at v1.18.32)
 4. Build, install binary (versioned name + `.bak.{TIMESTAMP}` DB backup)
 5. Update version pins: `AGENTS.md`, `README.md`, `apply.sh` header
 6. Commit in patches repo only (never commit in opencode-src)
@@ -60,8 +60,8 @@ Align with johnnymo87/opencode-patched upstream/main:
 1. `git fetch upstream` (johnnymo87) in patches repo; diff `upstream/main` patches vs ours
 2. Per patch: adopt (rebased into our stack) / skip (only if verified heavy friction at current tag) / drop (user preference)
    - **USER-REQUESTED EXCLUSIONS (diverge from parent intentionally, documented here):** `gemini-empty-parts.patch` (PR #28669), `vim.patch` (PR #12679), `opus5-adaptive-thinking.patch` (cherry-pick #38757) — upstream still carries them; we drop per user preference.
-   - All other parent patches are adopted (as of 2026-08-23: `db-isolation-guard`, `message-serve-provenance`, `tui-door-attach`, `tui-reconcile-bound` all adopted; `retry-cap` dropped as upstreamed `c78986831c` with stricter `MAX=5`).
-   - Local-only patches kept as safety (parent does not carry, still useful at v1.18.21): `vcs-untracked-normal` (VCS crash), `revert-orphan-parents` (#38864).
+   - All other parent patches are adopted (as of 2026-08-23: `db-isolation-guard`, `message-serve-provenance`, `tui-door-attach`, `tui-reconcile-bound` all adopted; `retry-cap` dropped as upstreamed `c78986831c` with stricter `MAX=5`; as of 2026-09-28: `permission-refresh-per-step`, `tui-message-scroll` adopted byte-identical; `sse-cancel-rejection` not adopted — sunset, already upstreamed as PR #44944 in v1.18.32).
+   - Local-only patches kept as safety (parent does not carry, still useful at v1.18.32): `vcs-untracked-normal` (VCS crash), `revert-orphan-parents` (#38864).
 3. Update `apply.sh` header + README table; verify clean-clone apply + build before committing
 
 New UI patches (web app): verify cosmetics live BEFORE cutting the patch — swap

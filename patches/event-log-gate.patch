@@ -143,7 +143,7 @@ index e4329a2..840a590 100644
 +      delete process.env["OPENCODE_EXPERIMENTAL_WORKSPACES"]
 +      try {
 +        const event = yield* events.publish(SyncMessage, { id: "gated", text: "hello" })
-+        expect(event.seq).toBe(0)
++        expect(event.durable?.seq).toBe(0)
 +
 +        const rows = yield* db
 +          .select()
@@ -162,7 +162,7 @@ index e4329a2..840a590 100644
 +        expect(seqRow?.seq).toBe(0)
 +
 +        const second = yield* events.publish(SyncMessage, { id: "gated", text: "again" })
-+        expect(second.seq).toBe(1)
++        expect(second.durable?.seq).toBe(1)
 +      } finally {
 +        process.env["OPENCODE_EXPERIMENTAL_WORKSPACES"] = prev ?? "1"
 +      }

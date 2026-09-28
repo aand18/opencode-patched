@@ -121,7 +121,7 @@ with applied patches by design.
    - Update the `apply.sh` DROPPED ledger with dates and reasons.
 4. If the fork added/kept patches we already carry (e.g. `retry-cap`,
    `cache-thinking-skip`, `tool-fix`): diff our version against theirs
-   (`git diff upstream/main -- patches/<name>.patch`) and fold in upstream
+   (`git diff upstream/main -- patches/<name>.patch`) and port upstream
    improvements only if behavior verified; ours may already be newer.
 
 ## Phase 4 — Rebasing a failing patch
@@ -163,7 +163,7 @@ Update all of these in the **patches repo** (they are version pins):
    running `bun install` or WRITES to tracked files resets them. Only stage files
    with real diffs: patches, apply.sh, AGENTS.md, README.md.
 2. Commit message style: `feat(v1.18.15): ...` / `docs: ...` / `chore(ci): ...`
-   with per-file reasoning. (Reference commits: 5cebd98c7 roll-forward + fold-in,
+   with per-file reasoning. (Reference commits: 5cebd98c7 roll-forward + port,
    b4c27f263 docs refresh, 4983450f5 workflow cleanup.)
 3. Push to `origin` (aand18) when the user approves.
 

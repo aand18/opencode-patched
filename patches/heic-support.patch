@@ -644,10 +644,21 @@ diff --git a/packages/session-ui/src/v2/components/prompt-input/attachments.ts b
 index 89f38ec4a3..227ba95128 100644
 --- a/packages/session-ui/src/v2/components/prompt-input/attachments.ts
 +++ b/packages/session-ui/src/v2/components/prompt-input/attachments.ts
-@@ -1,5 +1,6 @@
+@@ -1,5 +1,17 @@
  import { onMount } from "solid-js"
  import { makeEventListener } from "@solid-primitives/event-listener"
-+import { byteChecksum } from "@opencode-ai/core/util/encode"
++// Fallback blob id for contexts without crypto.subtle (secure-context only).
++// FNV-1a is not cryptographic, but this id is only a local dedup key — the
++// bytes still travel to the model untouched. (Upstream never exported the
++// byteChecksum symbol the original cut referenced; verified absent at v1.18.32.)
++function fnv1aHex(bytes: Uint8Array): string {
++  let hash = 0x811c9dc5
++  for (let i = 0; i < bytes.length; i++) {
++    hash ^= bytes[i] ?? 0
++    hash = Math.imul(hash, 0x01000193)
++  }
++  return (hash >>> 0).toString(16).padStart(8, "0")
++}
  import type { PromptInputV2Attachment, PromptInputV2Prompt } from "./types"
  
  const accepted = [
@@ -742,7 +753,7 @@ index 89f38ec4a3..227ba95128 100644
 +  const bytes = new Uint8Array(await file.arrayBuffer())
 +  const id = crypto.subtle
 +    ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((byte) => byte.toString(16).padStart(2, "0")).join("")
-+    : byteChecksum(bytes)
++    : fnv1aHex(bytes)
    return { id, url: URL.createObjectURL(file) }
  }
  const imageExtensions = new Map([

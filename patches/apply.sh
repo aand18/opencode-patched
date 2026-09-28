@@ -2,10 +2,11 @@
 # Apply local patches to opencode source for the v1.18 release line.
 # Usage: ./apply.sh <path-to-opencode-source>
 #
-# TARGET UPSTREAM: opencode v1.18.21
+# TARGET UPSTREAM: opencode v1.18.32
 #
 # PATCH SET (v1.18 line; rebased 2026-07-20 from the v1.17 line,
-# rolled forward v1.18.3 -> v1.18.15 on 2026-08-09 -> v1.18.21 on 2026-08-23,
+# rolled forward v1.18.3 -> v1.18.15 on 2026-08-09 -> v1.18.21 on 2026-08-23
+# -> v1.18.32 on 2026-09-28,
 # then aligned 2026-08-23 to johnnymo87/opencode-patched upstream/main @ 853da6382
 # (v1.18.18, 27 active) — adopt parent's new patches, drop divergences except
 # user-requested exclusions; + sse-heartbeat-4s added 2026-08-27,
@@ -13,7 +14,10 @@
 # + popover-nested-overlay added 2026-08-29,
 # + generic-tool-expand added 2026-09-04,
 # + mobile-landscape-theater added 2026-09-05,
-# + heic-support added 2026-09-11 (unified from heic-images + heic-images-v2 + heic-images-csp + heic-converting-toast, 35 total)):
+# + heic-support added 2026-09-11 (unified from heic-images + heic-images-v2 + heic-images-csp + heic-converting-toast, 35 total),
+# + permission-refresh-per-step + tui-message-scroll adopted from parent 2026-09-28
+#   (upstream/main @ ef55b9d76; sse-cancel-rejection NOT adopted — already upstreamed
+#   as PR #44944 in the v1.18.32 tree, verified by content; 37 total)):
 #   1. tool-fix.patch           (PR #16751) - synthetic step-start boundaries (tool_use/result mismatch)
 #   2. cache-thinking-skip.patch (#17883)    - cache breakpoints scan past trailing thinking/reasoning blocks
 #   3. sqlite-foreign-key-wrap.patch (local) - catch nested/wrapped FK constraints on modern error wrappers
@@ -21,6 +25,8 @@
 #   5. event-cold-start-directory.patch (local) - fix cold-start live-delivery race; MUST apply after
 #       event-session-scope (session-aggregate membership, no directory-equality match)
 #   6. createnext-readback.patch (local)    - Session.createNext reads durable row back after Created
+#       (+ Effect.orDie ported from parent 2026-09-28: missing row is a broken
+#       invariant, not recoverable — never-channel, surface as defect)
 #   7. serve-lease.patch        (local)     - serve-side session-lease participation (routing-lease.ts CAS,
 #       worker-thread heartbeat, fenced run-loop wrap; OPENCODE_ROUTING_DB-gated)
 #   8. attach-route-resolve.patch (local)   - pool-aware `opencode attach` (parseServeUrl/resolveServeUrl)
@@ -30,6 +36,8 @@
 #   11. step-end-diff-bound.patch (local)    - bound step-end summary diff to prevent CPU pin freeze
 #   12. globalbus-maxlisteners.patch (local) - uncap GlobalBus listener ceiling
 #   13. event-log-gate.patch     (local)     - gate durable event log behind OPENCODE_EXPERIMENTAL_WORKSPACES
+#       (test expectations ported from parent 2026-09-28: publish returns
+#       durable.seq, not top-level seq — event.seq is undefined on v1.18.32)
 #   14. compaction-bounded-load.patch (local) - bound prompt loop message load to compaction window
 #   15. available-cache.patch    (local)     - herd-collapse cache for CatalogV2 provider/model availability
 #   16. session-door-routes.patch (local)    - Phase 8: ?session_ids= query field on event.subscribe schema
@@ -208,6 +216,11 @@
 #       fresh-tree apply of 1-35 now reproduces all 12 touched files
 #       byte-for-byte (CR-insensitive; bun.lock/session-ui diffs were pure
 #       autocrlf checkout noise).
+#       Fixed 2026-09-28 (v1.18.32 roll): replaced byteChecksum (a symbol the
+#       original cut imported from @opencode-ai/core/util/encode but which never
+#       existed upstream — verified absent at v1.18.21 AND v1.18.32; the vite
+#       build fails on it) with a local FNV-1a fallback for the no-crypto.subtle
+#       path. Only a local dedup key; bytes travel untouched.
 #       Downscale resampler gallery measured 2026-09-12 (2400x1600 test
 #       chart -> 600x400, 3x-zoom crops of text/grid/circle zones; browser
 #       canvas A/A2/B vs photon-node Lanczos3/CatmullRom/Triangle C/D/E;
@@ -231,10 +244,36 @@
 #       Applies after #31 (shared server/shared/ui.ts, disjoint hunks);
 #       otherwise order-independent.
 #
+#   36. permission-refresh-per-step.patch (parent) - re-read session.permission
+#       at the top of every run-loop step (bead workstation-xm06): runLoop read
+#       the session ONCE per run, so a PATCH /session/:id mid-run (oc-mcp-enable
+#       granting an MCP server after an earlier deny) stayed invisible until the
+#       run ended ("Model tried to call unavailable tool"). One SELECT by
+#       primary key per step. Adopted byte-identical from parent
+#       (upstream/main @ ef55b9d76) 2026-09-28; --check clean on v1.18.32 over
+#       the full stack. Order-independent (only touches session/prompt.ts +
+#       its test, which no other patch modifies).
+#   37. tui-message-scroll.patch (parent) - scroll the TUI to a specific message
+#       (POST /session/:id/scroll-to-message, session-scoped so the front door
+#       owner-routes it; the TUI handler RECORDS a target and a reactive effect
+#       fires when the message exists — reactivity is the readiness signal).
+#       Adopted byte-identical from parent (upstream/main @ ef55b9d76) 2026-09-28;
+#       --check clean on v1.18.32 over the full stack. MUST apply after #19
+#       (shared groups/session.ts + handlers/session.ts, disjoint regions).
+#       Parent warning carried over: generated SDK types are HAND-CARRIED, do
+#       NOT regen wholesale (drops #19's mcp* client methods, cf. #29).
+#
 # IMPLEMENTERS (model that wrote each patch; #1-32 predate attribution):
-#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark; all others unknown.
+#   #33 Muse Spark 1.3 (Xhigh); #34 Muse Spark 1.3 (Xhigh); #35 Muse Spark;
+#   #36-37 parent johnnymo87/opencode-patched (adopted byte-identical); all others unknown.
 #
 # DROPPED / EXCLUDED patches (aligned with upstream/main 2026-08-14 + user preference):
+#   - sse-cancel-rejection.patch (parent #32): NOT ADOPTED — sunset condition met.
+#     Parent carries it as a backport of upstream PR #44944; its header says to drop
+#     it once the tracked tree already contains #44944. v1.18.32 contains it
+#     (verified by content 2026-09-28: both wrapSSE sites already read
+#     `reader.cancel(err).catch(() => {})`), so adopting would fail --check.
+#     Revisit only if we ever track a line older than 2026-09-02 again.
 #   - retry-cap.patch: REMOVED to align with parent (upstreamed c78986831c in v1.18.17, MAX=5 stricter than local 8;
 #     parent tombstone 4, do not re-litigate 5-vs-8). Verified at v1.18.21: RETRY_MAX_RETRIES=5 present.
 #   - gemini-empty-parts.patch (PR #28669): USER-REQUESTED EXCLUSION (parent carries it; we drop per user preference)
@@ -249,7 +288,7 @@
 #   - eager-input-streaming.patch: upstream-merged (PRs #23223, #24573, #24642)
 #   - prefill-fix.patch: upstream-merged (commit 69910f361, PR #29640)
 #   - caching.patch: dropped by upstream (opencode-cached PR #5422)
-#   Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29.
+#   Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29, #37 after #19.
 
 set -euo pipefail
 
@@ -298,6 +337,8 @@ PATCH_NAMES=(
   generic-tool-expand
   mobile-landscape-theater
   heic-support
+  permission-refresh-per-step
+  tui-message-scroll
 )
 if [ ! -d "$SOURCE_DIR" ]; then
   echo "Error: Source directory not found: $SOURCE_DIR"

@@ -2,7 +2,7 @@ diff --git a/packages/opencode/src/session/session.ts b/packages/opencode/src/se
 index 038ec9aa0..271a46e49 100644
 --- a/packages/opencode/src/session/session.ts
 +++ b/packages/opencode/src/session/session.ts
-@@ -576,7 +576,13 @@ export const layer: Layer.Layer<
+@@ -576,7 +576,17 @@ export const layer: Layer.Layer<
  
        yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
  
@@ -13,7 +13,11 @@ index 038ec9aa0..271a46e49 100644
 +      // write were ever lost (multi-writer split-brain during cutover) get() fails
 +      // loudly instead of returning a live-but-rowless session whose later
 +      // message/part projections would hit FK errors (bead workstation-p196).
-+      return yield* get(result.id)
++      // orDie: a missing row here is a broken invariant, not a recoverable
++      // condition, and `create` is declared with a `never` error channel — so
++      // surface it as a defect rather than leaking NotFoundError to callers.
++      // (ported from parent johnnymo87/opencode-patched, 2026-09-28.)
++      return yield* get(result.id).pipe(Effect.orDie)
      })
  
      const get = Effect.fn("Session.get")(function* (id: SessionID) {

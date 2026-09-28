@@ -1,0 +1,1046 @@
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+index ca7e625fa5..9de649a868 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/groups/session.ts
+@@ -134,7 +134,17 @@ export const SessionPaths = {
+   deleteMessage: `${root}/:sessionID/message/:messageID`,
+   deletePart: `${root}/:sessionID/message/:messageID/part/:partID`,
+   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
+-} as const
++  // Scroll the TUI to a message (bead workstation-v8jh, phase 2). Session-scoped
++  // for the same reason as the MCP routes above: the front door owner-routes it
++  // for free, and it must, because the effect lands in ONE process -- the serve
++  // whose TUI is mounted on this session.
++  //
++  // Deliberately NOT under /tui/. The door classifies every /tui/* route as a
++  // class-level 501 by design, so the picker could not reach it there; and the
++  // door never reads the request body, so a sessionID carried only in the payload
++  // could not route at all and would land on the anchor serve.
++  scrollToMessage: `${root}/:sessionID/scroll-to-message`,
++  } as const
+ 
+ export const SessionApi = HttpApi.make("session")
+   .add(
+@@ -499,6 +509,23 @@ export const SessionApi = HttpApi.make("session")
+             description: "Get the status of all Model Context Protocol (MCP) servers (process-global, addressable by session for front-door routing).",
+           }),
+         ),
++        HttpApiEndpoint.post("scrollToMessage", SessionPaths.scrollToMessage, {
++          params: { sessionID: SessionID },
++          query: WorkspaceRoutingQuery,
++          payload: Schema.Struct({
++            messageID: Schema.String,
++            force: Schema.optional(Schema.Boolean),
++          }),
++          success: described(Schema.Boolean, "Scroll request published"),
++          error: [ApiNotFoundError],
++        }).annotateMerge(
++          OpenApi.annotations({
++            identifier: "session.scrollToMessage",
++            summary: "Scroll TUI to message",
++            description:
++              "Ask the TUI mounted on this session to scroll to a message (process-local effect, addressable by session for front-door routing).",
++          }),
++        ),
+         HttpApiEndpoint.post("mcpConnect", SessionPaths.mcpConnect, {
+           params: { sessionID: SessionID, name: Schema.String },
+           query: WorkspaceRoutingQuery,
+diff --git a/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts b/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
+index eb568377af..4d3aeddf1d 100644
+--- a/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
++++ b/packages/opencode/src/server/routes/instance/httpapi/handlers/session.ts
+@@ -3,6 +3,7 @@ import { Agent } from "@/agent/agent"
+ import { MCP } from "@/mcp"
+ import { SessionV1 } from "@opencode-ai/core/v1/session"
+ import { EventV2Bridge } from "@/event-v2-bridge"
++import { TuiEvent } from "@/server/tui-event"
+ import { Command } from "@/command"
+ import { Permission } from "@/permission"
+ import { Question } from "@/question"
+@@ -447,6 +448,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session",
+       return yield* mcp.status()
+     })
+ 
++    const scrollToMessage = Effect.fn("SessionHttpApi.scrollToMessage")(function* (ctx: {
++      params: { sessionID: SessionID }
++      payload: { messageID: string; force?: boolean }
++    }) {
++      yield* requireSession(ctx.params.sessionID)
++      // sessionID comes from the PATH, never the payload: it is what the front door
++      // routed on, so trusting the body could publish a scroll for a session this
++      // serve does not own.
++      yield* events.publish(TuiEvent.MessageScroll, {
++        sessionID: ctx.params.sessionID,
++        messageID: ctx.payload.messageID,
++        force: ctx.payload.force ?? false,
++      })
++      // True means "published", NOT "a TUI scrolled" -- the bus cannot tell us
++      // whether anyone is subscribed. Callers must not read this as an ack; the
++      // meaningful signal is 404 from a serve whose build predates this route.
++      return true
++    })
++
+     const mcpConnect = Effect.fn("SessionHttpApi.mcpConnect")(function* (ctx: {
+       params: { sessionID: SessionID; name: string }
+     }) {
+@@ -542,6 +562,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session",
+       .handle("questionReply", questionReply)
+       .handle("questionReject", questionReject)
+       .handle("mcpStatus", mcpStatus)
++      .handle("scrollToMessage", scrollToMessage)
+       .handle("mcpConnect", mcpConnect)
+       .handle("mcpDisconnect", mcpDisconnect)
+       .handle("deleteMessage", deleteMessage)
+diff --git a/packages/schema/src/tui-event.ts b/packages/schema/src/tui-event.ts
+index 800094e61e..6401be19bc 100644
+--- a/packages/schema/src/tui-event.ts
++++ b/packages/schema/src/tui-event.ts
+@@ -56,4 +56,23 @@ export const SessionSelect = Event.define({
+   },
+ })
+ 
+-export const Definitions = Event.inventory(PromptAppend, CommandExecute, ToastShow, SessionSelect)
++export const MessageScroll = Event.define({
++  type: "tui.message.scroll",
++  schema: {
++    // REQUIRED, and load-bearing beyond mere addressing. event-session-scope.patch
++    // filters the SSE stream on `data.sessionID` and passes through anything that
++    // lacks a string one, so an event without this field would not be "unrouted" --
++    // it would be BROADCAST to every attached TUI on this serve, scrolling sessions
++    // nobody asked about.
++    sessionID: SessionID.annotate({ description: "Session containing the message" }),
++    messageID: Schema.String.annotate({ description: "Message ID to scroll to" }),
++    // True only for the caller's first, user-initiated attempt. Later attempts are
++    // speculative retries of a delivery whose success cannot be observed, and must
++    // not move a viewport the user has since taken over.
++    force: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))).annotate({
++      description: "Scroll even if the viewport is not parked at the bottom",
++    }),
++  },
++})
++
++export const Definitions = Event.inventory(PromptAppend, CommandExecute, ToastShow, SessionSelect, MessageScroll)
+diff --git a/packages/sdk/js/src/v2/gen/types.gen.ts b/packages/sdk/js/src/v2/gen/types.gen.ts
+index 8b8f88a11e..a791b5860f 100644
+--- a/packages/sdk/js/src/v2/gen/types.gen.ts
++++ b/packages/sdk/js/src/v2/gen/types.gen.ts
+@@ -75,6 +75,7 @@ export type Event =
+   | EventTuiCommandExecute2
+   | EventTuiToastShow2
+   | EventTuiSessionSelect2
++  | EventTuiMessageScroll2
+   | EventMcpToolsChanged
+   | EventMcpBrowserOpenFailed
+   | EventCommandExecuted
+@@ -1451,6 +1452,21 @@ export type GlobalEvent = {
+           sessionID: string
+         }
+       }
++    | {
++        id: string
++        type: "tui.message.scroll"
++        properties: {
++          /**
++           * Session containing the message
++           */
++          sessionID: string
++          /**
++           * Message ID to scroll to
++           */
++          messageID: string
++          force?: boolean
++        }
++      }
+     | {
+         id: string
+         type: "mcp.tools.changed"
+@@ -3016,6 +3032,22 @@ export type EventTuiSessionSelect2 = {
+   }
+ }
+ 
++export type EventTuiMessageScroll2 = {
++  id: string
++  type: "tui.message.scroll"
++  properties: {
++    /**
++     * Session containing the message
++     */
++    sessionID: string
++    /**
++     * Message ID to scroll to
++     */
++    messageID: string
++    force?: boolean
++  }
++}
++
+ export type CredentialValue = CredentialOAuth | CredentialKey
+ 
+ export type IntegrationInputs = {
+diff --git a/packages/tui/src/context/sync.tsx b/packages/tui/src/context/sync.tsx
+index ba69d66811..eaa0c5c2e5 100644
+--- a/packages/tui/src/context/sync.tsx
++++ b/packages/tui/src/context/sync.tsx
+@@ -29,6 +29,7 @@ import { createSimpleContext } from "./helper"
+ import { useExit } from "./exit"
+ import { useArgs } from "./args"
+ import { resolveRootSessionID } from "../util/session"
++import { REACH_DEFAULT_CAP, REACH_LIMIT, REACH_MARGIN, mergeReach, planReach } from "../routes/session/scroll-target"
+ import { batch, onMount, onCleanup } from "solid-js"
+ import path from "path"
+ import { useKV } from "./kv"
+@@ -156,6 +157,16 @@ export const {
+     })
+ 
+     const fullSyncedSessions = new Set<string>()
++    // workstation-psh9. The message store deliberately holds only the newest
++    // REACH_DEFAULT_CAP messages per session, because the transcript is NOT
++    // virtualized -- every stored message is a live renderable. Jumping to an older
++    // anchor means rendering everything between it and the present, so that session
++    // gets a temporarily larger cap. Per-session and temporary: the default is
++    // restored when the user leaves, so one deep jump does not permanently raise the
++    // cost of every session in the process.
++    const messageCaps = new Map<string, number>()
++    const reachingSessions = new Map<string, Promise<"hit" | "miss">>()
++    const capFor = (sessionID: string) => messageCaps.get(sessionID) ?? REACH_DEFAULT_CAP
+     const syncingSessions = new Map<string, Promise<void>>()
+     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+     const touchMessage = (sessionID: string, messageID: string) => {
+@@ -358,7 +369,7 @@ export const {
+             }),
+           )
+           const updated = store.message[event.properties.info.sessionID]
+-          if (updated.length > 100) {
++          if (updated.length > capFor(event.properties.info.sessionID)) {
+             const oldest = updated[0]
+             batch(() => {
+               setStore(
+@@ -659,8 +670,9 @@ export const {
+                   ),
+                 )
+                 infos.sort(compareMessage)
+-                const removed = infos.slice(0, -100)
+-                const visible = infos.slice(-100)
++                const cap = capFor(sessionID)
++                const removed = infos.slice(0, -cap)
++                const visible = infos.slice(-cap)
+                 const visibleIDs = new Set(visible.map((message) => message.id))
+                 for (const message of messages.data ?? []) {
+                   if (!visibleIDs.has(message.info.id)) {
+@@ -702,6 +714,79 @@ export const {
+           syncingSessions.set(sessionID, task)
+           return task
+         },
++        /**
++         * workstation-psh9. Pull enough history into the store that `targetID` is
++         * rendered, so the scroll-to-unread jump has something to scroll to.
++         *
++         * Returns "miss" when the anchor is older than REACH_LIMIT, so the caller can
++         * say so instead of appearing to do nothing. One fetch, never a walk backwards:
++         * an unbounded page-until-found on a very old anchor is exactly the cost the
++         * cap exists to avoid.
++         */
++        async reach(sessionID: string, targetID: string): Promise<"hit" | "miss"> {
++          // Must settle first. sync() trims to the cap when it lands, so a deep fetch
++          // racing an in-flight sync would be cut straight back down.
++          await result.session.sync(sessionID)
++          if ((store.message[sessionID] ?? []).some((message) => message.id === targetID)) return "hit"
++          // One deep fetch per session at a time. Without this a user who jumps twice
++          // inside the ~7.6s fetch gets two merges racing, and the second reconciles
++          // against a list the first has not written yet.
++          const running = reachingSessions.get(sessionID)
++          if (running) return running
++
++          const task = (async (): Promise<"hit" | "miss"> => {
++            const response = await sdk.client.session.messages({ sessionID, limit: REACH_LIMIT })
++            const items = response.data ?? []
++            const plan = planReach({
++              fetched: items.map((item) => item.info.id),
++              target: targetID,
++              margin: REACH_MARGIN,
++            })
++            if (plan.outcome === "miss") return "miss"
++
++            const byID = new Map(items.map((item) => [item.info.id, item]))
++            setStore(
++              produce((draft) => {
++                const current = draft.message[sessionID] ?? []
++                const candidates = plan.window.flatMap((id) => {
++                  const item = byID.get(id)
++                  return item ? [item.info] : []
++                })
++                // Reconciled against the draft, NOT a snapshot taken before the fetch:
++                // seconds have passed and messages may have arrived meanwhile.
++                const merged = mergeReach({ current, candidates })
++                // Every message in the store must have a parts entry or it renders empty.
++                // Only for messages actually being added -- writing parts for one already
++                // present would clobber live streaming state with a stale copy and strand
++                // its text mid-stream.
++                for (const info of merged.prepend) {
++                  const item = byID.get(info.id)
++                  if (item) draft.part[info.id] = item.parts
++                }
++                draft.message[sessionID] = [...merged.prepend, ...current]
++                messageCaps.set(sessionID, merged.cap)
++              }),
++            )
++            return "hit"
++          })().finally(() => {
++            reachingSessions.delete(sessionID)
++          })
++          reachingSessions.set(sessionID, task)
++          return task
++        },
++        release(sessionID: string) {
++          if (!messageCaps.has(sessionID)) return
++          messageCaps.delete(sessionID)
++          setStore(
++            produce((draft) => {
++              const current = draft.message[sessionID] ?? []
++              if (current.length <= REACH_DEFAULT_CAP) return
++              const removed = current.slice(0, -REACH_DEFAULT_CAP)
++              draft.message[sessionID] = current.slice(-REACH_DEFAULT_CAP)
++              for (const message of removed) delete draft.part[message.id]
++            }),
++          )
++        },
+       },
+       bootstrap,
+     }
+diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
+index 61abe4abd8..3c69d83e3a 100644
+--- a/packages/tui/src/routes/session/index.tsx
++++ b/packages/tui/src/routes/session/index.tsx
+@@ -21,6 +21,7 @@ import { useRoute, useRouteData } from "../../context/route"
+ import { useProject } from "../../context/project"
+ import { useSync } from "../../context/sync"
+ import { useEvent } from "../../context/event"
++import { atBottom, consumeLaunchScrollTarget, parseLaunchScrollTarget, shouldAccept } from "./scroll-target"
+ import { SplitBorder } from "../../ui/border"
+ import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+ import { Spinner } from "../../component/spinner"
+@@ -211,6 +212,44 @@ export function Session() {
+       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+   })
+   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
++
++  // workstation-v8jh phase 2: a scroll target that outlives its own delivery.
++  //
++  // The transport is live-only SSE with no replay, so a request published before
++  // this route mounts is dropped and the caller retries blind -- it cannot observe
++  // TUI readiness from outside the process (the tui-control RPC that would allow
++  // that is dead on both ends, and an SSE subscription proves a client connected,
++  // not that this route mounted).
++  //
++  // But the SECOND wait -- for the anchor message to be fetched and rendered -- is
++  // observable right here, so it is waited on rather than retried: the handler
++  // records a target and an effect below fires when the message actually exists.
++  // One delivered request therefore suffices forever, however slowly content loads.
++  //
++  // Declared HERE, above the post-sync bottom-scroll that reads it, rather than
++  // beside that effect: the read sits after an await so a later declaration would
++  // happen to work, which is not the same as being correct.
++  const [pendingScroll, setPendingScroll] = createSignal<string | undefined>(
++    // workstation-swws: the COLD path, where the SSE request above cannot arrive.
++    //
++    // A jump that auto-attaches launches a new TUI, and the publisher has no way to
++    // wait for it: measured on the real failure, four retries landed between
++    // 13:37:21.899 and 13:37:23.841 while this process subscribed to /event at
++    // 13:37:27.988. SSE does not replay, so every one was published to nobody.
++    //
++    // So the target rides the environment of the process the picker is already
++    // launching, and is read here at setup -- before the post-sync bottom-scroll
++    // below, which reads pendingScroll() to decide whether to suppress itself.
++    // Seeding via the initial value rather than an effect is what makes that
++    // ordering a fact rather than a race.
++    parseLaunchScrollTarget(
++      consumeLaunchScrollTarget(typeof process !== "undefined" ? process.env : undefined),
++      route.sessionID,
++    ),
++  )
++  // Targets already deep-fetched for, so a store write cannot re-trigger the fetch
++  // that caused it. Cleared on navigation along with the pending target.
++  const reachAttempted = new Set<string>()
+   const messagesBeforeRevert = () => {
+     const messageID = session()?.revert?.messageID
+     if (!messageID) return messages()
+@@ -312,7 +351,10 @@ export function Session() {
+       }
+       editor.reconnect(result.data.directory)
+       await sync.session.sync(sessionID)
+-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
++      // Suppressed when a scroll target is pending, or this would clobber the
++      // jump: it runs the moment sync resolves, which is exactly when the anchor
++      // becomes available. Suppressing is explicit; racing the two effects is not.
++      if (route.sessionID === sessionID && scroll && !pendingScroll()) scroll.scrollBy(100_000)
+     })().catch((error) => {
+       if (route.sessionID !== sessionID) return
+       toast.show({
+@@ -355,6 +397,156 @@ export function Session() {
+   const dialog = useDialog()
+   const renderer = useRenderer()
+ 
++  // Records; does not scroll. See pendingScroll above. Decision logic lives in
++  // ./scroll-target so it is testable without a renderer.
++  onCleanup(
++    event.on("tui.message.scroll", (evt) => {
++      const live = scroll && !scroll.isDestroyed ? scroll : undefined
++      const accept = shouldAccept({
++        eventSessionID: evt.properties.sessionID,
++        routeSessionID: route.sessionID,
++        // Optional on the wire (the schema supplies the default server-side), so
++        // default again here rather than trusting a field that may be absent.
++        // Absent must mean "guarded", never "force".
++        force: evt.properties.force ?? false,
++        bottom: live ? atBottom(live.scrollTop, live.scrollHeight, live.viewport.height) : undefined,
++      })
++      if (!accept) return
++      setPendingScroll(evt.properties.messageID)
++    }),
++  )
++
++  // The anchor may not be fetched yet. Reactivity covers that half: this re-runs
++  // when messages() changes, so a target that arrives late still lands, and one
++  // that never arrives (compacted away, or older than the newest 100 messages sync
++  // fetches) simply never resolves -- leaving the viewport where it was, which is
++  // today's behaviour.
++  //
++  // Being in the store is NOT enough to scroll, though. Solid creates the
++  // renderable synchronously with the store write, but opentui only runs layout
++  // once per frame (updateFromLayout is gated on _lastLayoutFrame === frameId), so
++  // right now the child's y is stale and scrollChildIntoView would compute a delta
++  // of ~0, appear to succeed, and land nowhere. Hence one deferred hop before
++  // acting -- the same 50ms the neighbouring toBottom() uses for exactly this
++  // reason. It is a timer, but a one-shot wait for layout, not a retry loop
++  // guessing at readiness.
++  createEffect(() => {
++    const id = pendingScroll()
++    if (!id) return
++    if (!messages().some((m) => m.id === id)) {
++      // Not loaded. The store holds only the newest REACH_DEFAULT_CAP messages, and
++      // a minority of anchors are older than that. Measured 2026-09-15 over the 73
++      // anchored sessions then resolvable, ordered by time_created as this store
++      // orders: median distance 36, p75 87, p90 201, max 384; 76% land INSIDE the
++      // default window. For the other 24%, waiting on reactivity alone would leave
++      // this pending forever with the viewport at the bottom, so pull history in.
++      //
++      // An earlier comment here claimed a median of 192 and only 27% inside the
++      // window, and a later correction blamed that entirely on ORDER BY id. Both
++      // were wrong. Re-measured across a FIXED population, the ordering moves only
++      // 7 of 73 distances -- but it moves those enormously (max 1936 by id versus
++      // 384 by time, and one real session 1744 versus 42). It is a TAIL effect, not
++      // a median one; the original median came from a different, unreconstructable
++      // population. Quote n and a date with any number here, because this database
++      // keeps growing and the figures drift.
++      //
++      // Once per target: reach() writes to the store, which re-runs this effect, and
++      // an unguarded call would fetch in a loop.
++      if (reachAttempted.has(id)) return
++      reachAttempted.add(id)
++      const sessionID = route.sessionID
++      // Sized for the COLD case, which is the only one that needs a notice at all.
++      //
++      // Warm and repeated, this fetch is 0.05-0.18s (limit=512) against 0.016s for
++      // the ordinary one -- fast enough that the notice is replaced almost as soon
++      // as it appears. Cold, once, it was 7.6s. An earlier comment here reported
++      // that single cold sample as the measured cost of the fetch, which is what
++      // this duration was originally justified by; the number is real but it is the
++      // worst case, not the cost.
++      //
++      // The duration stays generous anyway, and the reasoning survives the
++      // correction: the toast is single-slot with no dismiss and every outcome below
++      // REPLACES it, so overshooting costs nothing while undershooting expires
++      // mid-fetch on exactly the slow jump that most needs to look alive.
++      toast.show({
++        message: "Loading earlier messages...",
++        variant: "info",
++        duration: 15000,
++      })
++      void sync.session
++        .reach(sessionID, id)
++        .then((outcome) => {
++          // Left mid-fetch. onCleanup already ran -- before this write raised the cap
++          // -- so reclaim it here or the deep history leaks for the process's life.
++          if (route.sessionID !== sessionID) {
++            sync.session.release(sessionID)
++            return
++          }
++          if (outcome !== "miss") {
++            // Replaces the loading notice rather than leaving it to expire. The scroll
++            // itself happens when this effect re-runs through messages().
++            //
++            // Says what actually finished. This fires when the FETCH succeeds, which
++            // is strictly before the scroll is attempted, so the old wording
++            // ("Jumped to unread message") asserted an outcome it could not yet
++            // observe -- and would have kept asserting it if the scroll then landed
++            // nowhere. A notice that claims a jump that did not happen is the exact
++            // failure this whole change exists to remove, so it claims only the load.
++            toast.show({ message: "Loaded earlier messages", variant: "info", duration: 1500 })
++            return
++          }
++          // Older than we are willing to fetch. Say so: the failure this whole
++          // change exists to remove is the jump that silently does nothing.
++          toast.show({
++            message: "Unread message is too far back to jump to",
++            variant: "info",
++            duration: 4000,
++          })
++          setPendingScroll(undefined)
++        })
++        .catch(() => {
++          // Un-guard so a later request for the same anchor can try again: the failure
++          // is usually transient, and leaving it guarded would make this target
++          // permanently unjumpable for the life of the component.
++          reachAttempted.delete(id)
++          if (route.sessionID !== sessionID) return
++          toast.show({
++            message: "Could not load earlier messages",
++            variant: "error",
++            duration: 4000,
++          })
++          setPendingScroll(undefined)
++        })
++      return
++    }
++    const timer = setTimeout(() => {
++      if (scroll && !scroll.isDestroyed) scroll.scrollChildIntoView(id)
++      // Cleared only here, after the attempt. If the message is in the store but
++      // has no renderable (reverted, or a synthetic-only turn that renders no id'd
++      // box) then it never will have one -- renderable creation is synchronous with
++      // the store write -- so one attempt is the right number, not zero and not
++      // forever.
++      setPendingScroll(undefined)
++    }, 50)
++    onCleanup(() => clearTimeout(timer))
++  })
++
++  // Hand back the memory and render cost of a deep jump when the user leaves.
++  //
++  // onCleanup rather than an effect on route.sessionID, because app.tsx mounts this
++  // route as `<Show when={sessionID} keyed>{() => <Session />}</Show>`: a keyed Show
++  // DISPOSES this component and builds a new one per session, so route.sessionID is
++  // constant for an instance's entire life and an `on(() => route.sessionID)` here
++  // can never fire. The same block used to clear pendingScroll on navigation; that
++  // was dead for the same reason, and harmless only because a fresh instance gets a
++  // fresh signal -- not because the clearing worked.
++  //
++  // Releasing on the way out and not before is deliberate: trimming a session while
++  // it is on screen removes children above the viewport and shifts the view under the
++  // reader.
++  const mountedSessionID = route.sessionID
++  onCleanup(() => sync.session.release(mountedSessionID))
++
+   event.on("session.status", (evt) => {
+     if (evt.properties.sessionID !== route.sessionID) return
+     if (evt.properties.status.type !== "retry") return
+diff --git a/packages/tui/src/routes/session/scroll-target.ts b/packages/tui/src/routes/session/scroll-target.ts
+new file mode 100644
+index 0000000000..03bb0f6172
+--- /dev/null
++++ b/packages/tui/src/routes/session/scroll-target.ts
+@@ -0,0 +1,215 @@
++/**
++ * Decision logic for tui.message.scroll (workstation-v8jh phase 2).
++ *
++ * Extracted from the session route so the delicate parts -- an off-by-one bottom
++ * test and a force override that has to beat that test -- can be exercised without
++ * standing up a renderer. The route keeps the effects; this keeps the choices.
++ */
++
++/**
++ * Is the viewport parked at the bottom, i.e. has the user NOT taken it over?
++ *
++ * Tolerance of one row matches opentui's own isAtStickyReengagePoint. Without it a
++ * token streaming in mid-jump moves scrollTop a row and reads as "the user
++ * scrolled", which would drop the very scroll the user asked for.
++ *
++ * A session with no scrollback has maxScrollTop 0 and scrollTop 0, which is at the
++ * bottom -- correct: there is nothing to take over.
++ */
++export function atBottom(scrollTop: number, scrollHeight: number, viewportHeight: number): boolean {
++  // The Math.max clamp mirrors opentui's own maxScrollTop computation. It is kept
++  // for that correspondence, not because it changes an answer: the scrollbox content
++  // carries minHeight:"100%", so post-layout scrollHeight >= viewportHeight and the
++  // subtraction is never negative. For every reachable input the clamped and
++  // unclamped forms therefore agree, no test can distinguish them, and mutating it
++  // away survives. Said plainly, with the invariant named, rather than covered by a
++  // test that would only appear to pin it.
++  const maxScrollTop = Math.max(0, scrollHeight - viewportHeight)
++  return scrollTop >= maxScrollTop - 1
++}
++
++/**
++ * Should this scroll request be recorded as the pending target?
++ *
++ * `force` marks the caller's first, user-initiated attempt -- the jump itself. It
++ * must win even against a viewport the user left scrolled up days ago, because
++ * ignoring it would silently discard an explicit request. Every later attempt is a
++ * speculative retry of a delivery whose success cannot be observed, and must not
++ * yank a viewport the user has since taken over.
++ *
++ * `bottom` is undefined when the scrollbox does not exist yet (the event can arrive
++ * before first paint). That is not "the user scrolled away", so it accepts: the
++ * effect will scroll once the anchor renders.
++ */
++export function shouldAccept(opts: {
++  eventSessionID: string
++  routeSessionID: string
++  force: boolean
++  bottom: boolean | undefined
++}): boolean {
++  if (opts.eventSessionID !== opts.routeSessionID) return false
++  if (opts.force) return true
++  return opts.bottom !== false
++}
++
++/** Messages kept above the anchor so it is not flush against the top edge, and so
++ * the shift-one eviction in sync's message.updated handler has something to eat
++ * before it reaches the anchor itself. */
++export const REACH_MARGIN = 20
++
++/** How deep a single fetch goes. Sized from measurement, not taste: measured
++ * 2026-09-15 over the 73 anchored sessions then resolvable, ordered by
++ * time_created as the store orders them, the anchor sat a median of 36 messages
++ * from the end, p75 87, p90 201, max 384. 512 covers every observed case, the
++ * worst by 128.
++ *
++ * The number is unchanged; its justification was wrong twice and the second
++ * attempt is worth keeping straight. It first cited a median of 192 and a max of
++ * 498. That was corrected to blame ORDER BY id, which is the column the store does
++ * NOT sort on -- but re-measuring both orderings across one fixed population shows
++ * the ordering changes only 7 of 73 distances. What it changes, it changes hugely:
++ * the maximum is 1936 by id against 384 by time, because ids predating the 48-bit
++ * wrap sort nowhere near their timestamps. So ordering governs the TAIL -- which is
++ * exactly what a limit is sized against -- while the original median came from a
++ * different population that can no longer be reconstructed.
++ *
++ * Recorded at this length so nobody "restores headroom" that was never missing,
++ * and so the next person re-measures rather than trusting a bare number. */
++export const REACH_LIMIT = 512
++
++/** The store's default per-session message cap, and the floor for an expanded one. */
++export const REACH_DEFAULT_CAP = 100
++
++export type ReachPlan = { outcome: "miss" } | { outcome: "hit"; window: string[] }
++
++/**
++ * Which slice of a deep fetch is worth keeping, given the anchor we must render.
++ *
++ * The renderer is not virtualized (`<For each={messages()}>`), so scrolling to a
++ * message requires it to be rendered, which requires it to be in the store. But the
++ * store deliberately holds only the newest REACH_DEFAULT_CAP to bound render cost, so
++ * reaching an older anchor means paying for everything between it and the present. We
++ * therefore keep only what the jump needs -- anchor minus a margin, not the whole
++ * fetch -- so the rendered count is the anchor's distance plus the margin (median
++ * ~56 for real anchors, worst observed ~404) rather than REACH_LIMIT every time.
++ *
++ * Deliberately says nothing about what is already in the store: by the time the fetch
++ * returns, that snapshot is seconds stale. Reconciling against the live list is
++ * mergeReach's job.
++ */
++export function planReach(opts: { fetched: string[]; target: string; margin: number }): ReachPlan {
++  const index = opts.fetched.indexOf(opts.target)
++  // Not in the deepest fetch we are willing to make. The caller degrades visibly; it
++  // must not fetch again, or a very old anchor becomes an unbounded walk backwards.
++  if (index === -1) return { outcome: "miss" }
++  return { outcome: "hit", window: opts.fetched.slice(Math.max(0, index - opts.margin)) }
++}
++
++type Ordered = { id: string; time: { created: number } }
++
++/**
++ * Is `a` strictly older than `b`?
++ *
++ * Mirrors sync's compareMessage (created time, then id as the tiebreak) because the
++ * store's message list must stay sorted -- an unsorted list silently breaks the
++ * binary search that later inserts rely on, which would duplicate messages rather
++ * than fail. Duplicated here rather than imported to avoid a cycle: sync imports this
++ * module, not the other way round.
++ */
++export function isOlderThan(a: Ordered, b: Ordered): boolean {
++  if (a.time.created !== b.time.created) return a.time.created < b.time.created
++  return a.id.localeCompare(b.id) < 0
++}
++
++/**
++ * Reconcile a deep fetch against the CURRENT store contents.
++ *
++ * Must run against the live list, not a snapshot taken before the fetch: the fetch
++ * takes seconds (~7.6s measured on a 759-message session) and messages can arrive
++ * meanwhile. Re-adding one of those would both duplicate it and overwrite its live
++ * streaming parts with a stale copy, which strands the text mid-stream.
++ *
++ * The ordering guard is what keeps the store's invariant: only strictly-older
++ * messages may be prepended, so the result stays sorted no matter what the fetch
++ * returned or what arrived while it was in flight.
++ */
++export function mergeReach<T extends Ordered>(opts: {
++  current: T[]
++  candidates: T[]
++}): { prepend: T[]; cap: number } {
++  const have = new Set(opts.current.map((message) => message.id))
++  const oldest = opts.current[0]
++  // Two guards. The strictly-older test is the load-bearing one: it alone rejects a
++  // message that is absent from the store but newer than its oldest entry -- which
++  // happens when a revert has punched a hole in the retained window. The
++  // already-present test is redundant while `current` is sorted (anything in it is by
++  // definition not older than its first element), so no test can distinguish it and
++  // removing it survives mutation. It is kept as the cheap direct expression of "do
++  // not re-add what we already have", and said plainly here rather than covered by a
++  // test that would only appear to pin it.
++  const prepend = opts.candidates.filter(
++    (candidate) => !have.has(candidate.id) && (!oldest || isOlderThan(candidate, oldest)),
++  )
++  // Computed from what is actually in the list after this merge, not from the
++  // pre-fetch snapshot, or arrivals during the fetch would push the real length past
++  // the cap and the shift-one eviction would start eating the history we just paid
++  // seven seconds for.
++  const cap = Math.max(REACH_DEFAULT_CAP, prepend.length + opts.current.length)
++  return { prepend, cap }
++}
++
++/** The environment variable carrying a scroll target across a cold attach. */
++export const LAUNCH_SCROLL_ENV = "OPENCODE_SCROLL_TO"
++
++/**
++ * Parse a launch-time scroll target of the form `<sessionID>:<messageID>`.
++ *
++ * WHY THIS EXISTS RATHER THAN AN SSE EVENT. On a cold jump the picker launches a
++ * NEW TUI process, and the request it would publish is dropped: measured on the
++ * real failure, the last of four retries landed at 13:37:23.841 and this process
++ * subscribed to /event at 13:37:27.988 -- 4.1s later, with no SSE replay. The
++ * publisher cannot observe readiness from outside the process, so the target
++ * instead rides the environment of the process the picker is ALREADY launching,
++ * where it waits as long as startup takes.
++ *
++ * SESSION-QUALIFIED, and that is the whole point of the format. An environment
++ * variable is inherited by every descendant of the shell that set it, so a bare
++ * message id would be claimed by whichever session's TUI read it first --
++ * potentially a different one. That failure is silent and wrong (a jump in the
++ * wrong transcript), which is worse than the failure it replaces (no jump).
++ *
++ * Both halves are shape-checked. The caller only ever compares the result against
++ * ids in the message store, so a malformed value would not raise -- it would sit
++ * pending forever with the viewport at the bottom, which is exactly the symptom
++ * this change removes.
++ */
++export function parseLaunchScrollTarget(raw: string | undefined, routeSessionID: string): string | undefined {
++  if (!raw || !routeSessionID) return undefined
++  const parts = raw.trim().split(":")
++  // Exactly two. An extra colon means a malformed value, not a message id with a
++  // suffix worth salvaging -- splitting on the first and keeping the rest would
++  // accept garbage as though it were well-formed.
++  if (parts.length !== 2) return undefined
++  const [sessionID, messageID] = parts
++  if (sessionID !== routeSessionID) return undefined
++  if (!/^msg_[A-Za-z0-9]+$/.test(messageID)) return undefined
++  return messageID
++}
++
++/**
++ * Read the launch-time scroll target and remove it, so it can be used exactly once.
++ *
++ * The deletion is what enforces "once" -- there is no flag to get out of step with
++ * the value. A second call finds nothing, so a route remount inside a long-lived
++ * TUI cannot re-seed a jump the user has already scrolled away from.
++ *
++ * It also stops the variable being inherited by anything this process later spawns,
++ * which matters because an environment variable is otherwise handed to every
++ * descendant and this one names a specific session.
++ */
++export function consumeLaunchScrollTarget(env: Record<string, string | undefined> | undefined): string | undefined {
++  if (!env) return undefined
++  const raw = env[LAUNCH_SCROLL_ENV]
++  delete env[LAUNCH_SCROLL_ENV]
++  return raw
++}
+diff --git a/packages/tui/test/routes/session/scroll-target.test.ts b/packages/tui/test/routes/session/scroll-target.test.ts
+new file mode 100644
+index 0000000000..0b55587114
+--- /dev/null
++++ b/packages/tui/test/routes/session/scroll-target.test.ts
+@@ -0,0 +1,284 @@
++import { describe, expect, test } from "bun:test"
++import {
++  atBottom,
++  consumeLaunchScrollTarget,
++  isOlderThan,
++  mergeReach,
++  parseLaunchScrollTarget,
++  planReach,
++  shouldAccept,
++} from "../../../src/routes/session/scroll-target"
++
++// workstation-v8jh phase 2. These pin the two decisions that are easy to get
++// subtly wrong and impossible to notice: the one-row tolerance on the bottom
++// test, and force having to beat that test.
++
++describe("atBottom", () => {
++  test("exactly at the bottom", () => {
++    // scrollHeight 500, viewport 100 -> maxScrollTop 400
++    expect(atBottom(400, 500, 100)).toBe(true)
++  })
++
++  test("one row up still counts, so a streaming token does not read as a user scroll", () => {
++    expect(atBottom(399, 500, 100)).toBe(true)
++  })
++
++  test("two rows up does not count -- that is a user who scrolled", () => {
++    expect(atBottom(398, 500, 100)).toBe(false)
++  })
++
++  test("far from the bottom", () => {
++    expect(atBottom(0, 500, 100)).toBe(false)
++  })
++
++  test("a session with no scrollback is at the bottom", () => {
++    // Nothing to take over: maxScrollTop clamps to 0 and scrollTop is 0.
++    expect(atBottom(0, 40, 100)).toBe(true)
++  })
++
++  test("content shorter than the viewport never reports 'scrolled away'", () => {
++    expect(atBottom(0, 10, 100)).toBe(true)
++  })
++})
++
++describe("shouldAccept", () => {
++  const base = { eventSessionID: "ses_a", routeSessionID: "ses_a", force: false, bottom: true }
++
++  test("accepts a bottom-parked viewport", () => {
++    expect(shouldAccept(base)).toBe(true)
++  })
++
++  test("rejects another session's event", () => {
++    // The SSE filter scopes by sessionID, but a serve hosting two sessions can
++    // still deliver here; without this the wrong transcript jumps.
++    expect(shouldAccept({ ...base, eventSessionID: "ses_b" })).toBe(false)
++  })
++
++  test("rejects a speculative retry once the user has scrolled away", () => {
++    expect(shouldAccept({ ...base, bottom: false })).toBe(false)
++  })
++
++  test("force beats a scrolled-away viewport -- it is the user's own jump", () => {
++    // The warm case this exists for: a session left scrolled up days ago. Without
++    // force, every attempt drops and pressing jump appears to do nothing.
++    expect(shouldAccept({ ...base, force: true, bottom: false })).toBe(true)
++  })
++
++  test("force does NOT cross sessions", () => {
++    expect(shouldAccept({ ...base, eventSessionID: "ses_b", force: true, bottom: false })).toBe(false)
++  })
++
++  test("accepts before first paint, when there is no scrollbox to judge", () => {
++    // Arriving pre-render is the common cold-attach case; treating "unknown" as
++    // "scrolled away" would drop precisely the attempts that matter most.
++    expect(shouldAccept({ ...base, bottom: undefined })).toBe(true)
++  })
++
++  test("force with no scrollbox yet still accepts", () => {
++    // The cold-attach shape: attempt 0 arrives before first paint.
++    expect(shouldAccept({ ...base, force: true, bottom: undefined })).toBe(true)
++  })
++})
++
++// workstation-psh9. The reach fix: the anchor is usually NOT in the store (median
++// 192 messages back, only 27% within the newest 100), so a deep fetch has to
++// decide what to prepend and how far to raise the per-session cap. These pin the
++// arithmetic; the store mutation itself lives in sync.tsx.
++
++describe("planReach", () => {
++  const ids = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `msg_${from + i}`)
++
++  test("anchor absent from the deep fetch is a miss -- caller shows the degraded notice", () => {
++    expect(planReach({ fetched: ids(50, 99), target: "msg_1", margin: 20 }).outcome).toBe("miss")
++  })
++
++  test("window starts a margin above the anchor, not at the start of the fetch", () => {
++    const plan = planReach({ fetched: ids(50, 99), target: "msg_80", margin: 5 })
++    if (plan.outcome !== "hit") throw new Error("expected hit")
++    expect(plan.window[0]).toBe("msg_75")
++    // and runs to the present, so the merge can splice it onto the live tail
++    expect(plan.window.at(-1)).toBe("msg_99")
++  })
++
++  test("margin is clamped at the start of the fetch rather than going negative", () => {
++    const plan = planReach({ fetched: ids(50, 99), target: "msg_52", margin: 20 })
++    if (plan.outcome !== "hit") throw new Error("expected hit")
++    expect(plan.window[0]).toBe("msg_50")
++  })
++
++  test("margin 0 puts the anchor itself at the start of the window", () => {
++    const plan = planReach({ fetched: ids(50, 99), target: "msg_80", margin: 0 })
++    if (plan.outcome !== "hit") throw new Error("expected hit")
++    expect(plan.window[0]).toBe("msg_80")
++  })
++})
++
++// The merge runs against the LIVE store, seconds after the fetch was issued, so these
++// pin what happens when the world moved underneath it.
++describe("mergeReach", () => {
++  const m = (n: number, created = n) => ({ id: `msg_${String(n).padStart(3, "0")}`, time: { created } })
++  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => m(from + i))
++
++  test("prepends only what the store lacks", () => {
++    const merged = mergeReach({ current: range(90, 99), candidates: range(75, 99) })
++    expect(merged.prepend.map((x) => x.id)).toEqual(range(75, 89).map((x) => x.id))
++  })
++
++  test("a message that ARRIVED during the fetch is not re-added or re-parted", () => {
++    // fetch returned 75..99; meanwhile msg_100 landed live. It must not be prepended:
++    // doing so would duplicate it and clobber its streaming parts with a stale copy.
++    const merged = mergeReach({ current: [...range(90, 99), m(100)], candidates: [...range(75, 99), m(100)] })
++    expect(merged.prepend.some((x) => x.id === "msg_100")).toBe(false)
++  })
++
++  test("a candidate NEWER than the store's oldest is refused, keeping the list sorted", () => {
++    // Only strictly-older messages may be prepended; an out-of-order splice would
++    // silently break the binary search that later inserts rely on.
++    const merged = mergeReach({ current: range(90, 99), candidates: [m(95), m(80)] })
++    expect(merged.prepend.map((x) => x.id)).toEqual(["msg_080"])
++  })
++
++  test("a fetched message filling a GAP in the store is refused, not spliced out of order", () => {
++    // The store can have holes: message.removed (a revert) can delete something in the
++    // middle of the retained window. The fetch still returns it, and it is NOT in the
++    // store -- so the already-present check passes it -- but prepending it would put a
++    // newer message in front of older ones and silently break the sortedness that the
++    // store's binary-search inserts depend on. Only the strictly-older test catches
++    // this, which is why both guards exist.
++    const withHole = [m(90), ...range(92, 99)]
++    const merged = mergeReach({ current: withHole, candidates: [m(80), m(91)] })
++    expect(merged.prepend.map((x) => x.id)).toEqual(["msg_080"])
++  })
++
++  test("cap reflects the ACTUAL post-merge length, not a pre-fetch snapshot", () => {
++    const merged = mergeReach({ current: range(400, 499), candidates: range(280, 499) })
++    expect(merged.prepend.length).toBe(120)
++    expect(merged.cap).toBe(220)
++  })
++
++  test("cap never drops below the default, so a small session is not left tighter than normal", () => {
++    const merged = mergeReach({ current: range(98, 99), candidates: range(95, 99) })
++    expect(merged.cap).toBe(100)
++  })
++
++  test("empty store still merges (nothing to be older than)", () => {
++    const merged = mergeReach({ current: [], candidates: range(75, 99) })
++    expect(merged.prepend.length).toBe(25)
++  })
++
++  test("ties on created time fall back to id, matching the store's own comparator", () => {
++    expect(isOlderThan(m(1, 500), m(2, 500))).toBe(true)
++    expect(isOlderThan(m(2, 500), m(1, 500))).toBe(false)
++    expect(isOlderThan(m(9, 100), m(1, 500))).toBe(true)
++  })
++})
++
++// workstation-swws: the launch-time scroll target.
++//
++// The cold path (a jump that auto-attaches a NEW TUI) cannot be served over SSE:
++// measured on a real failure, the four retries landed 4.1s BEFORE this process
++// subscribed to /event, and SSE does not replay. So the target arrives in the
++// environment of the process the picker is already launching, and this parses it.
++//
++// It is session-qualified on purpose. An environment variable is inherited by
++// every descendant, so a bare message id would be applied by whatever session the
++// TUI happened to open -- including a DIFFERENT one, which is a silent wrong-jump
++// rather than a visible failure.
++describe("parseLaunchScrollTarget", () => {
++  const SID = "ses_abc123"
++  const MSG = "msg_xyz789"
++
++  test("returns the message id when the session matches", () => {
++    expect(parseLaunchScrollTarget(`${SID}:${MSG}`, SID)).toBe(MSG)
++  })
++
++  test("returns undefined for a DIFFERENT session -- the var is inherited, not addressed", () => {
++    expect(parseLaunchScrollTarget(`ses_other:${MSG}`, SID)).toBeUndefined()
++  })
++
++  test("absent variable", () => {
++    expect(parseLaunchScrollTarget(undefined, SID)).toBeUndefined()
++  })
++
++  test("empty variable", () => {
++    expect(parseLaunchScrollTarget("", SID)).toBeUndefined()
++  })
++
++  test("no separator", () => {
++    expect(parseLaunchScrollTarget(`${SID}${MSG}`, SID)).toBeUndefined()
++  })
++
++  test("missing message id", () => {
++    expect(parseLaunchScrollTarget(`${SID}:`, SID)).toBeUndefined()
++  })
++
++  test("missing session id", () => {
++    expect(parseLaunchScrollTarget(`:${MSG}`, SID)).toBeUndefined()
++  })
++
++  test("a message id that is not a message id is rejected", () => {
++    // Shape-checked rather than trusted. This value crosses a process boundary,
++    // and the only thing downstream does with it is compare against store ids --
++    // so garbage would not be caught, it would simply never resolve and leave the
++    // jump pending forever with the viewport at the bottom.
++    expect(parseLaunchScrollTarget(`${SID}:ses_nope`, SID)).toBeUndefined()
++    expect(parseLaunchScrollTarget(`${SID}:../etc`, SID)).toBeUndefined()
++    expect(parseLaunchScrollTarget(`${SID}:msg_has space`, SID)).toBeUndefined()
++  })
++
++  test("an EXTRA colon is rejected rather than silently truncated", () => {
++    // Splitting on the first colon and ignoring the rest would accept a malformed
++    // value as though it were well-formed.
++    expect(parseLaunchScrollTarget(`${SID}:${MSG}:extra`, SID)).toBeUndefined()
++  })
++
++  test("surrounding whitespace is tolerated", () => {
++    // A shell round trip can add a trailing newline; that is not a malformed target.
++    expect(parseLaunchScrollTarget(` ${SID}:${MSG}\n`, SID)).toBe(MSG)
++  })
++
++  test("an empty route session never matches, even against a well-formed value", () => {
++    expect(parseLaunchScrollTarget(`${SID}:${MSG}`, "")).toBeUndefined()
++  })
++
++  test("an empty route session does not match an empty session in the value", () => {
++    // Found by mutation testing: without the routeSessionID guard, "" === "" is a
++    // MATCH and this returns a message id for a route that has no session. That is
++    // the silent wrong-jump the qualification exists to prevent, not a no-op.
++    expect(parseLaunchScrollTarget(`:${MSG}`, "")).toBeUndefined()
++  })
++
++  test("the message prefix is anchored -- a suffix match is not a message id", () => {
++    // Found by mutation testing: an unanchored pattern accepts anything ENDING in
++    // something id-shaped.
++    expect(parseLaunchScrollTarget(`${SID}:xmsg_abc`, SID)).toBeUndefined()
++    expect(parseLaunchScrollTarget(`${SID}:../msg_abc`, SID)).toBeUndefined()
++  })
++})
++
++describe("consumeLaunchScrollTarget", () => {
++  test("returns the raw value and removes it", () => {
++    const env: Record<string, string | undefined> = { OPENCODE_SCROLL_TO: "ses_a:msg_b" }
++    expect(consumeLaunchScrollTarget(env)).toBe("ses_a:msg_b")
++    expect("OPENCODE_SCROLL_TO" in env).toBe(false)
++  })
++
++  test("a second call finds nothing -- a remount cannot re-seed a stale jump", () => {
++    const env: Record<string, string | undefined> = { OPENCODE_SCROLL_TO: "ses_a:msg_b" }
++    consumeLaunchScrollTarget(env)
++    expect(consumeLaunchScrollTarget(env)).toBeUndefined()
++  })
++
++  test("removal also stops the target being inherited by spawned children", () => {
++    // The same delete serves both purposes; this pins the second one so a future
++    // refactor to a flag-based 'once' does not silently lose it.
++    const env: Record<string, string | undefined> = { OPENCODE_SCROLL_TO: "ses_a:msg_b", PATH: "/usr/bin" }
++    consumeLaunchScrollTarget(env)
++    expect(env).toEqual({ PATH: "/usr/bin" })
++  })
++
++  test("absent variable, and a missing env, are both tolerated", () => {
++    expect(consumeLaunchScrollTarget({})).toBeUndefined()
++    expect(consumeLaunchScrollTarget(undefined)).toBeUndefined()
++  })
++})

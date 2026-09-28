@@ -6,7 +6,7 @@ onto upstream release tags. The stack is aligned with the
 patches adopted from there are rebased onto each new release here, plus
 locally-authored patches.
 
-Currently tracking **v1.18.21** (rebased 2026-08-23; 32 patches, aligned to `johnnymo87/opencode-patched` `853da6382`).
+Currently tracking **v1.18.32** (rolled forward 2026-09-28; 37 patches, aligned to `johnnymo87/opencode-patched` `ef55b9d76`).
 
 ## Patch stack
 
@@ -52,8 +52,10 @@ is a summary.
 | 33 | `generic-tool-expand.patch` | local | expandable generic (unknown/MCP/custom) tool calls: bordered card, input + JSON-object output as key/value rows (no JSON blob), other output as Markdown, separator instead of labels, per-section copy |
 | 34 | `mobile-landscape-theater.patch` | local | short-landscape theater for touch phones: hide titlebar + mobile tabs + composer (unlayered CSS), auto-fullscreen push with first-tap capture, once-per-load hint pill; Context button toggles the side panel so stuck review is closable (apply after #29) |
 | 35 | `heic-support.patch` | local | phone HEIC photo attach end-to-end (unified from heic-images + heic-images-v2 + heic-images-csp + heic-converting-toast): whitelist heic/heif in v1 + v2 attach pipelines, HEIC → JPEG via lazy heic2any (WASM, capped at 2000px, resilient export resolution), CSP worker-src + unsafe-eval for its blob worker, persistent converting toast; hardcoded English copy per i18n waiver; canvas smoothing=high measured ≈ photon CatmullRom legibility (multi-step halving byte-identical in Chrome, not adopted) (apply after #31) |
+| 36 | `permission-refresh-per-step.patch` | parent `johnnymo87` | re-read `session.permission` at the top of every run-loop step so a mid-run MCP grant takes effect (order-independent) |
+| 37 | `tui-message-scroll.patch` | parent `johnnymo87` | scroll the TUI to a specific message (`POST /session/:id/scroll-to-message`, session-scoped; reactive effect fires when the message exists) (apply after #19) |
 
-Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29.
+Dependency constraints: #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3, #30 after #5, #34 after #29, #37 after #19.
 
 ### Patch implementers
 
@@ -80,6 +82,16 @@ Detailed writeups for the patches shared with the upstream fork
 - **`db-isolation-guard.patch`** — `packages/core/src/database/database.ts:42` + new `isolation.ts` (incident 2026-08-14). `OPENCODE_DB` absolute wins over `XDG_DATA_HOME`, so throwaway `XDG_DATA_HOME` copy recipe left DB on prod; guard refuses when `XDG_DATA_HOME` set and `OPENCODE_DB` outside it (escape `OPENCODE_DB_ALLOW_FOREIGN_XDG=1`). Armed only when `XDG_DATA_HOME` set (prod pool has it unset), so no break. Applies clean at `v1.18.21`, order-independent, 1 + 184 lines, 14 tests.
 
 - **`retry-cap.patch` dropped** — upstream `c78986831c` in `v1.18.17` now caps at `RETRY_MAX_RETRIES=5` with `RETRY_JITTER_FACTOR=0.25` (`packages/opencode/src/session/retry.ts:31`); parent tombstone 4 says do not re-litigate `5-vs-8`. Verified at `v1.18.21`: cap present, so local `5->8` bump removed to align.
+
+### Adopted from parent `johnnymo87` (2026-09-28 alignment to `ef55b9d76`, tracked tree `v1.18.32`)
+
+- **`permission-refresh-per-step.patch`** — re-reads `session.permission` at the top of every run-loop step (`session/prompt.ts` + test). A run outlives its prompt, so a mid-run `PATCH /session/:id` grant stayed invisible until the run ended. Adopted byte-identical; `--check` clean on `v1.18.32` over the full stack, carried test passes. Order-independent.
+
+- **`tui-message-scroll.patch`** — scrolls the TUI to a specific message (`POST /session/:id/scroll-to-message`, session-scoped so the front door owner-routes it; reactive effect fires when the message exists). Adopted byte-identical; `--check` clean on `v1.18.32` over the full stack, 42 carried tests pass. Must apply after #19 (shared session route files, disjoint regions); generated SDK types hand-carried, no wholesale regen (cf. #29).
+
+- **`sse-cancel-rejection.patch` NOT adopted** — sunset condition met: parent carries it as a backport of upstream PR #44944 with instructions to drop once the tracked tree contains it. `v1.18.32` contains it (verified by content: both `wrapSSE` sites already read `reader.cancel(err).catch(() => {})`).
+
+- **Ported parent improvements to shared patches** — `createnext-readback`: `Effect.orDie` on the readback (missing row = broken invariant, never-channel); `event-log-gate` test: `event.seq` → `event.durable?.seq` (publish returns the seq under `durable` on this line — the old assertion is `undefined`).
 
 ### Cache thinking-skip (`cache-thinking-skip.patch`)
 
@@ -155,6 +167,8 @@ because they modify disjoint regions):
 | generic-tool-expand | `session-ui/src/components/basic-tool.{tsx,css}`, new `generic-tool-input.ts` + test |
 | mobile-landscape-theater | `app/src/components/titlebar.tsx`, `app/src/pages/session.tsx`, `app/src/components/session-context-usage.tsx`, `app/src/index.css`, `app/src/i18n/` (1 key × 62 locales) |
 | heic-support | HEIC-only regions across app + session-ui + opencode server (ui.ts csp shared with #31, disjoint; single bun.lock heic2any dep) |
+| permission-refresh-per-step | `session/prompt.ts` + test (no overlap with any other patch) |
+| tui-message-scroll | `httpapi/groups/session.ts`, `handlers/session.ts` (same files as session-mcp-routes #19, disjoint regions; apply after #19) |
 
 ## Dropped patches
 
@@ -166,6 +180,7 @@ Full ledger with reasons lives in the `patches/apply.sh` header. Highlights:
 - `eager-input-streaming.patch`, `prefill-fix.patch` — merged upstream
 - `caching.patch` — dropped by upstream (opencode-cached PR #5422)
 - `gemini-empty-parts.patch`, `vim.patch`, `opus5-adaptive-thinking.patch` — **USER-REQUESTED EXCLUSIONS** (upstream still carries; we drop per user preference, documented in `AGENTS.md:42`)
+- `sse-cancel-rejection.patch` — NOT adopted 2026-09-28: parent's backport of upstream PR #44944, already contained in the `v1.18.32` tree (verified by content); adopting would fail `--check`
 - `tui-follow-owner.patch`, `integration-list-batch.patch`, `instance-state-partition.patch` — upstream removed them
 
 ## Installation
@@ -186,14 +201,14 @@ opencode --version
 ```bash
 # source clone (separate from this repo) checked out at the target tag
 git clone https://github.com/anomalyco/opencode.git opencode-src
-git -C opencode-src checkout v1.18.21
+git -C opencode-src checkout v1.18.32
 
 # apply the patch stack
 ./patches/apply.sh opencode-src            # must print "All patches applied successfully"
 
 # build (bun install is REQUIRED for v1.18.15+ — vendored @opencode-ai/client tarball)
 bun install --cwd opencode-src
-OPENCODE_VERSION=1.18.21 OPENCODE_CHANNEL=prod \
+OPENCODE_VERSION=1.18.32 OPENCODE_CHANNEL=prod \
   bun run --cwd opencode-src/packages/opencode build
 
 # binary lands at opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode
@@ -206,7 +221,7 @@ directly. `dev-serve.sh` (repo root) wraps the exact command with the right flag
 and env:
 
 ```bash
-./dev-serve.sh   # = bun --conditions=browser --define 'OPENCODE_VERSION="1.18.21"' --define 'OPENCODE_CHANNEL="prod"' opencode-src/packages/opencode/src/index.ts serve --hostname 0.0.0.0 --port 4096 --mdns
+./dev-serve.sh   # = bun --conditions=browser --define 'OPENCODE_VERSION="1.18.32"' --define 'OPENCODE_CHANNEL="prod"' opencode-src/packages/opencode/src/index.ts serve --hostname 0.0.0.0 --port 4096 --mdns
 ```
 
 Edit a file → `Ctrl-C` → rerun; no build step. The Web UI is proxied from

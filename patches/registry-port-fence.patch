@@ -1256,7 +1256,7 @@ index 12e8d9c..0c7260a 100644
  // `opencode acp` speaks newline-delimited JSON-RPC over stdin/stdout. It is
 @@ -285,7 +331,7 @@ export function withCliFixture<A, E>(
          Effect.sync(() =>
-           Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...runArgs(message, opts)], {
+           Bun.spawn(["bun", "run", cliEntry, ...runArgs(message, opts)], {
              cwd: home,
 -            env: { ...process.env, ...env, ...options?.env },
 +            env: { ...hermeticBaseEnv(), ...env, ...options?.env },
@@ -1268,15 +1268,15 @@ index 12e8d9c..0c7260a 100644
        if (opts?.extraArgs) argv.push(...opts.extraArgs)
  
 +      const spawnCmd = opts?.exec
-+        ? ["bash", "-c", `export OPENCODE_SERVE_EXPECTED_PID=\$\$; exec bun run --conditions=browser "${cliEntry}" ${argv.map((a) => `"${a}"`).join(" ")}`]
-+        : ["bun", "run", "--conditions=browser", cliEntry, ...argv]
++        ? ["bash", "-c", `export OPENCODE_SERVE_EXPECTED_PID=\$\$; exec bun run "${cliEntry}" ${argv.map((a) => `"${a}"`).join(" ")}`]
++        : ["bun", "run", cliEntry, ...argv]
 +
        // Acquire the subprocess; release sends SIGTERM and awaits exit on
        // scope close. Wrapped in Effect.ignore so a flaky kill doesn't surface
        // as a finalizer error during test teardown.
        const proc = yield* Effect.acquireRelease(
          Effect.sync(() =>
--          Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
+-          Bun.spawn(["bun", "run", cliEntry, ...argv], {
 +          Bun.spawn(spawnCmd, {
              cwd: home,
 -            env: { ...process.env, ...env, ...opts?.env },
@@ -1308,7 +1308,7 @@ index 12e8d9c..0c7260a 100644
  
 @@ -397,7 +450,7 @@ export function withCliFixture<A, E>(
          Effect.sync(() =>
-           Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
+           Bun.spawn(["bun", "run", cliEntry, ...argv], {
              cwd: opts?.cwd ?? home,
 -            env: { ...process.env, ...env, ...opts?.env },
 +            env: { ...hermeticBaseEnv(), ...env, ...opts?.env },
