@@ -13,7 +13,7 @@
 - Server password env is `OPENCODE_PASSWORD`; `OPENCODE_SERVER_PASSWORD` is the fallback (`packages/cli/src/env.ts`).
 - Unpatched v2 builds are named `opencode-v{VERSION}-{CHANNEL}-{TIMESTAMP}` — no `patched` infix.
 
-**Build (v1 patch stack, parked at v1.18.32):** `OPENCODE_VERSION=1.18.32 OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
+**Build (v1 patch stack — obsolete; tree moved to v2.1.4 on 2026-10-25):** `OPENCODE_VERSION=1.18.32 OPENCODE_CHANNEL=prod bun run --cwd packages/opencode build`
 - **Fast path (local iteration): append `--single`** — builds only the current platform (`opencode-linux-x64`) instead of all 12 targets. Verified 2026-08-30: ~29 s vs ~5 min for the full build, smoke test included. Use for patch iteration; the full multi-target build is only needed for release/publishing. Optional extra: `--skip-install` additionally skips the cross-platform `bun install --os="*"` steps — only safe when dependencies have not changed since the last `bun install`.
 - `OPENCODE_VERSION` MUST be set to a version that exists on npm (e.g., `1.18.32`), otherwise plugin dependency resolution will fail: `@opencode-ai/plugin@0.0.0-prod-...` 404s on npm.
 - After switching to a new release tag, run `bun install` first — v1.18.15+ vendors `@opencode-ai/client` as a tarball (`packages/app/vendor/`), and without it the app build fails on `@opencode-ai/client/promise` resolution.
@@ -28,7 +28,7 @@
 
 **Dev (v2 source, no build):** `bun run dev` from the repo root runs `bun run --cwd packages/cli src/index.ts`; `bun run dev:vite` for the web app, `bun run dev:web` for `packages/app`. The `dev:live` scripts wire `OPENCODE_PASSWORD` and `--server` from the running service.
 
-**Dev (v1 patch stack, no build):** run the patched source directly — no binary build needed for testing changes/patches. `./dev-serve.sh` (repo root) mirrors the built binary: same env (`OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`) + `serve --hostname 0.0.0.0 --port 4096 --mdns`. Edit a file → `Ctrl-C` → rerun.
+**Dev (v1 patch stack — obsolete):** run the patched source directly — no binary build needed for testing changes/patches. `./dev-serve.sh` (repo root) mirrors the built binary: same env (`OPENCODE_SERVER_PASSWORD`, `OPENCODE_DB`) + `serve --hostname 0.0.0.0 --port 4096 --mdns`. Edit a file → `Ctrl-C` → rerun.
 - Command is `bun --conditions=browser --define 'OPENCODE_VERSION="1.18.32"' --define 'OPENCODE_CHANNEL="prod"' <src>/packages/opencode/src/index.ts serve …`. Run the file **directly** (`bun [flags] file.ts`), not `bun run file.ts` — `--define` is not a `bun run` subcommand flag (it prints usage and exits).
 - The `--define` flags mirror the prod binary (source otherwise falls back to `version="local"`, `channel="local"`); keep `channel=prod` or the new-UI layout default flips.
 - **Web UI:** source mode proxies it from `https://app.opencode.ai` — the embedded `opencode-web-ui.gen.ts` only resolves under `Bun.build` (a no-`./` import specifier). Fine for backend/patch testing (UI still hits your patched API); run `bun run dev:web` (Vite) separately for the patched UI. The backend's own port therefore never shows local session-ui/app changes — always verify UI patches in the Vite dev UI.
@@ -60,7 +60,7 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 
 Swapping the **running prod binary** (:4096) without a manual restart: `scripts/upgrade-prod.sh <new-binary> --model <providerID/modelID>`.
 - Verifies before prod is touched: a dev instance on a DB copy, running with prod's captured env, must answer a real PONG round-trip on `--model`. Then health + PONG on the relaunched prod; any failure after prod stops restores the DB backup and relaunches the previous binary.
-- `--model` names the model that must keep working — pass the one the calling session uses. It is not the server default: prod's default resolves to `openrouter/moonshotai/kimi-k3.1-pro` (credentials in `~/.local/share/opencode/auth.json`), which is a different model from the one an agent session usually runs on, so gating it proves the default works rather than that yours does.
+- `--model` names the model that must keep working — pass the one the calling session uses.
 - Detaches itself (setsid) before it can stop :4096, because that server hosts the session running it. Run `--dry-run` first (foreground, prod untouched). Progress: `tail -f /tmp/upgrade-prod.log`.
 - Exercise the destructive path against a throwaway instance instead of prod: `--prod-port 4120 --config-file … --last-good …`.
 
@@ -89,14 +89,15 @@ measured sizing basis (real strings + max width) in the `apply.sh` header commen
 rebase/re-derivation has a why, not a guess.
 
 **Gotchas:**
-- opencode-src working tree is dirty with patch changes (by design); never `git checkout .` / `git reset` it
+- opencode-src is a clean tag checkout (v2.1.4 since 2026-10-25). Build patched variants in a worktree (`git worktree add ../<name> <tag>`) and keep this tree at a tag, so a patch experiment never costs the tree
 - Patches repo shows spurious "modified" files from CRLF/autocrlf stat-cache noise — running `bun install` or writes to tracked files resets them; skip unrelated noise when staging
 
-**Prod runs v2.x while `opencode-src` sits at the v1.18.32 tag with the patch stack applied in its working tree.** The v1 tree is the wrong reference for the live HTTP surface (cost a wrong turn on 2026-10-24):
+**The live HTTP surface is v2's `/api/…`, not the v1 `/session` routes** (the v1 tree cost a wrong turn on 2026-10-24):
 - Live surface is `/api/…`: `POST /api/session` (create, `{model:{providerID,id}}`), `POST /api/session/{id}/prompt` (`{text}` — admits only), `GET /api/session/{id}/message`, `POST /api/experimental/session/{id}/wait` (blocks until the agent loop is idle — the completion signal), `GET /api/model?directory=`, `GET /api/info` (version/pid — the useful liveness probe). Legacy `POST /session` returns 405.
 - `Model.Ref` is `{id, providerID}`, not `modelID`; assistant messages carry `model` plus `content[]`.
 - A fresh `serve` binds its port before location plugins activate and answers 503 `Location plugins did not finish activating` for ~10–45 s — poll for readiness. `/global/health` and `/health` return the SPA HTML catch-all, not JSON.
-- Read v2 source without touching the dirty v1 tree: the v2 tags are already fetched in the clone, so `git show v2.1.4:<path>` works; `git worktree add ../opencode-src-v2 <tag>` for a full tree. Checking out v2 in place would drop the ~163 uncommitted patch hunks (reproducible via `./patches/apply.sh`, but the stack does not apply to v2's restructured packages).
+- `opencode-src` is at **v2.1.4** as of 2026-10-25 (pristine tag checkout, 0 modified). The v1 patch stack is obsolete; its working-tree state was saved to `/tmp/opencode/v1-patch-stack.diff` + `/tmp/opencode/v1-untracked.tar`. Other tags read with `git show <tag>:<path>` — all v2 tags are fetched locally.
+- `node_modules`/`dist` in the tree are still the v1 ones; `bun install` with bun 1.4.4 is needed before a v2 build.
 
 **Patch dependency order (in apply.sh):** #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3 (see header for all). Legacy 24-patch stack was #11 after #10 etc.
 
