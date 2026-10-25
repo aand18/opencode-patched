@@ -51,7 +51,7 @@
 
 **UI toggle:** New layout is controlled by `newLayoutDesigns` in browser localStorage key `settings.v3` under `general`. Toggle in Settings → General → "New layout". Sunset date: Sept 14, 2026 (old UI forced off after).
 
-**Patches:** `patches/apply.sh` header is the source of truth for patch set, apply order, dependency constraints, and dropped patches. `README.md` has the same info summarized.
+**Patches (v1):** `patches/apply.sh` header is the source of truth for patch set, apply order, dependency constraints, and dropped patches. `README.md` has the same info summarized.
 
 **Workflows:**
 
@@ -64,7 +64,7 @@ Swapping the **running prod binary** (:4096) without a manual restart: `scripts/
 - Detaches itself (setsid) before it can stop :4096, because that server hosts the session running it. Run `--dry-run` first (foreground, prod untouched). Progress: `tail -f /tmp/upgrade-prod.log`.
 - Exercise the destructive path against a throwaway instance instead of prod: `--prod-port 4120 --config-file … --last-good …`.
 
-Roll forward to a new upstream release:
+Roll forward to a new upstream release (v1 patch stack):
 1. Fetch new tag into opencode-src (detached HEAD at tag; create local tag from FETCH_HEAD)
 2. Run `bun install` (v1.18.15+ vendors `@opencode-ai/client` tarball)
 3. `./patches/apply.sh opencode-src` — fix/rebase any failing patch, verify fresh-clone apply (37/37 at v1.18.32)
@@ -72,7 +72,7 @@ Roll forward to a new upstream release:
 5. Update version pins: `AGENTS.md`, `README.md`, `apply.sh` header
 6. Commit in patches repo only (never commit in opencode-src)
 
-Align with johnnymo87/opencode-patched upstream/main:
+Align with johnnymo87/opencode-patched upstream/main (v1 patch stack):
 1. `git fetch upstream` (johnnymo87) in patches repo; diff `upstream/main` patches vs ours
 2. Per patch: adopt (rebased into our stack) / skip (only if verified heavy friction at current tag) / drop (user preference)
    - **USER-REQUESTED EXCLUSIONS (diverge from parent intentionally, documented here):** `gemini-empty-parts.patch` (PR #28669), `vim.patch` (PR #12679), `opus5-adaptive-thinking.patch` (cherry-pick #38757) — upstream still carries them; we drop per user preference.
@@ -80,7 +80,7 @@ Align with johnnymo87/opencode-patched upstream/main:
    - Local-only patches kept as safety (parent does not carry, still useful at v1.18.32): `vcs-untracked-normal` (VCS crash), `revert-orphan-parents` (#38864).
 3. Update `apply.sh` header + README table; verify clean-clone apply + build before committing
 
-New UI patches (web app): verify cosmetics live BEFORE cutting the patch — swap
+New UI patches (web app, v1 patch stack): verify cosmetics live BEFORE cutting the patch — swap
 classes in the running app via chrome-devtools `evaluate_script` and measure the
 result (e.g. element `scrollWidth` vs `offsetWidth`), which is much cheaper than a
 build/install cycle. Tailwind arbitrary-value classes (`w-[360px]`) beat non-important
@@ -96,12 +96,12 @@ rebase/re-derivation has a why, not a guess.
 - Live surface is `/api/…`: `POST /api/session` (create, `{model:{providerID,id}}`), `POST /api/session/{id}/prompt` (`{text}` — admits only), `GET /api/session/{id}/message`, `POST /api/experimental/session/{id}/wait` (blocks until the agent loop is idle — the completion signal), `GET /api/model?directory=`, `GET /api/info` (version/pid — the useful liveness probe). Legacy `POST /session` returns 405.
 - `Model.Ref` is `{id, providerID}`, not `modelID`; assistant messages carry `model` plus `content[]`.
 - A fresh `serve` binds its port before location plugins activate and answers 503 `Location plugins did not finish activating` for ~10–45 s — poll for readiness. `/global/health` and `/health` return the SPA HTML catch-all, not JSON.
-- `opencode-src` is at **v2.1.4** as of 2026-10-25 (pristine tag checkout, 0 modified). The v1 patch stack is obsolete; its working-tree state was saved to `/tmp/opencode/v1-patch-stack.diff` + `/tmp/opencode/v1-untracked.tar`. Other tags read with `git show <tag>:<path>` — all v2 tags are fetched locally.
+- `opencode-src` is at **v2.1.4** as of 2026-10-25 (pristine tag checkout, 0 modified). The v1 patch stack is obsolete and its working-tree state was discarded. Other tags read with `git show <tag>:<path>` — all v2 tags are fetched locally.
 - `node_modules`/`dist` in the tree are still the v1 ones; `bun install` with bun 1.4.4 is needed before a v2 build.
 
-**Patch dependency order (in apply.sh):** #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3 (see header for all). Legacy 24-patch stack was #11 after #10 etc.
+**Patch dependency order (v1 apply.sh):** #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3 (see header for all). Legacy 24-patch stack was #11 after #10 etc.
 
-**VCS large repo fix (v1.18.3+):** `vcs-untracked-normal.patch` switches `git status --untracked-files=all` to `--untracked-files=normal` and filters directory entries. Prevents CPU saturation and VCS crash on repos with many untracked files (upstream #33928, #21699, #3176).
+**VCS large repo fix (v1, v1.18.3+):** `vcs-untracked-normal.patch` switches `git status --untracked-files=all` to `--untracked-files=normal` and filters directory entries. Prevents CPU saturation and VCS crash on repos with many untracked files (upstream #33928, #21699, #3176).
 
 **UI toggle bug (v1.18.x):** The "New layout" toggle in Settings → General is hidden by default because `layoutTransitionEligible` defaults to `false` and nothing ever sets it to `true`. To show the toggle and switch to old layout, run in browser console:
 ```javascript
