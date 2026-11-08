@@ -60,7 +60,7 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 
 Swapping the **running prod binary** (:4096) without a manual restart: `scripts/upgrade-prod.sh <new-binary> --model <providerID/modelID>`.
 - Verifies before prod is touched: a dev instance on a DB copy, running with prod's captured env, must answer a real PONG round-trip on `--model`. Then health + PONG on the relaunched prod; any failure after prod stops restores the DB backup and relaunches the previous binary.
-- `--model` names the model that must keep working — pass the one the calling session uses.
+- `--model` names the model that must keep working — pass the one the calling session uses. Resolve it from `$OPENCODE_SESSION_ID` via `GET /api/session/{id}` (`model.providerID`/`model.id`) before invoking; the script verifies `--model` against it and aborts on mismatch — never reuse a remembered model.
 - Detaches itself (setsid) before it can stop :4096, because that server hosts the session running it. Run `--dry-run` first (foreground, prod untouched). Progress: `tail -f /tmp/upgrade-prod.log`.
 - Exercise the destructive path against a throwaway instance instead of prod: `--prod-port 4120 --config-file … --last-good …`.
 

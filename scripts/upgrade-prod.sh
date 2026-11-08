@@ -7,7 +7,8 @@ set -euo pipefail
 #                          [--foreground] [--timeout <sec>] [--prompt-timeout <sec>]
 #                          [--prod-port <port>] [--config-file <path>] [--last-good <path>]
 #
-# Flow: discover prod (:4096) and capture its argv/env/cwd -> verify the new
+# Flow: discover prod (:4096) and capture its argv/env/cwd -> verify --model
+# matches the calling session (OPENCODE_SESSION_ID) when set -> verify the new
 # binary -> start a dev instance on a DB copy using prod's exact env -> live
 # PONG round-trip on the caller's model (the model gate) -> stop prod, launch the
 # new binary -> PONG round-trip on prod -> record last-known config + last-good
@@ -18,6 +19,8 @@ set -euo pipefail
 # - Detaches itself (setsid) before it can touch prod, so the agent session
 #   that runs it is not bricked when prod's process is stopped. --dry-run never
 #   touches prod, so it stays in the foreground.
+# - When OPENCODE_SESSION_ID is set (caller under opencode), --model must equal
+#   that session's model; mismatch aborts before any DB copy (step 1b).
 # - DB copies and restores use the sqlite online backup API only. A plain `cp`
 #   misses the WAL tail (see AGENTS.md), so there is no `cp` fallback: a failed
 #   backup aborts the run.
@@ -406,6 +409,24 @@ def main():
         print(f"health: ok version={info.get('version', 'unknown')} models={len(models)}")
         return 0
 
+    if mode == "session-model":
+        session_id = sys.argv[5]
+        cwd = sys.argv[6] if len(sys.argv) > 6 else ""
+        query = "?" + urllib.parse.urlencode({"directory": cwd}) if cwd else ""
+        try:
+            data = api.call("GET", f"/api/session/{session_id}" + query, timeout=15)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, RuntimeError, KeyError) as err:
+            print(f"session-model: {type(err).__name__}: {err}")
+            return 1
+        model = ((data.get("data") or {}).get("model") or {})
+        provider_id = model.get("providerID")
+        model_id = model.get("id") or model.get("modelID")
+        if not provider_id or not model_id:
+            print("session-model: session has no model")
+            return 1
+        print(f"{provider_id}/{model_id}")
+        return 0
+
     provider, model, text, cwd = sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
     ready_budget = float(sys.argv[9]) if len(sys.argv) > 9 else 90.0
     query = "?" + urllib.parse.urlencode({"directory": cwd}) if cwd else ""
@@ -598,6 +619,25 @@ if [[ ! -f "$DB_PATH" ]]; then
   exit 1
 fi
 log "Prod DB: $DB_PATH"
+
+# ---------- step 1b: caller-model enforcement ----------
+# --model must name the calling session's model. When the caller runs under
+# opencode (OPENCODE_SESSION_ID set), resolve that session's model from prod
+# with the captured auth and abort early on mismatch, before any DB copy.
+# Skipped for throwaway instances (--prod-port != 4096) and manual runs
+# without a session id.
+if [[ -n "${OPENCODE_SESSION_ID:-}" && -n "$PROD_PID" && "$PROD_PORT" == "4096" ]]; then
+  log "Verifying caller session model ($OPENCODE_SESSION_ID)..."
+  if ! SESSION_MODEL=$(python3 "$TMP_DIR/probe.py" session-model "http://127.0.0.1:$PROD_PORT" "$PROD_ENV_FILE" 20 "$OPENCODE_SESSION_ID" "$PROD_CWD" 2>&1); then
+    log "ERROR: could not resolve caller session model from $OPENCODE_SESSION_ID: $SESSION_MODEL"
+    exit 1
+  fi
+  if [[ "$MODEL_ID" != "$SESSION_MODEL" ]]; then
+    log "ERROR: --model $MODEL_ID does not match calling session model $SESSION_MODEL. Pass $SESSION_MODEL (resolve from \$OPENCODE_SESSION_ID; never reuse a remembered model) or unset OPENCODE_SESSION_ID for manual runs."
+    exit 1
+  fi
+  log "Caller model check passed: $SESSION_MODEL"
+fi
 
 if $FOREGROUND && ! $DRY_RUN && [[ -n "$PROD_PID" ]]; then
   # Stopping prod kills whatever it serves — including this script's own agent
