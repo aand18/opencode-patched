@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
     --config-file) CONFIG_FILE="${2:-}"; shift ;;
     --last-good) LAST_GOOD="${2:-}"; shift ;;
     --help|-h)
-      sed -n '3,28p' "${BASH_SOURCE[0]}"
+      sed -n "/^# upgrade-prod\.sh/,/^$/p" "${BASH_SOURCE[0]}" | sed '$d'
       exit 0
       ;;
     *) NEW_BINARY="$1" ;;
@@ -99,7 +99,7 @@ log() { echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 # even after the caller's own process tree goes away.
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-ln -sfn "$LOG_FILE" "$LOG_LINK" 2>/dev/null || true
+if ! $DRY_RUN && ! $CHECK_ONLY; then ln -sfn "$LOG_FILE" "$LOG_LINK"; fi
 if [[ "${UPGRADE_DETACHED:-}" != "1" ]] && ! $DRY_RUN && ! $FOREGROUND && ! $CHECK_ONLY; then
   setsid env UPGRADE_DETACHED=1 UPGRADE_RUN_LOG="$LOG_FILE" bash "$SCRIPT_PATH" "${ORIG_ARGS[@]}" \
     </dev/null >/dev/null 2>>"$LOG_FILE" &
@@ -231,7 +231,7 @@ on_signal() {
 }
 
 trap on_signal INT TERM
-trap 'rc=$?; if $ROLLBACK_DONE; then v=rolled-back; elif (( rc == 0 )); then v=ok; else v=failed; fi; log "VERDICT: $v new=${NEW_VERSION:-${NEW_VERSION_ACTUAL:-}} pid=${NEW_PID:-${PROD_PID:-}} phase=${PHASE}"; cleanup; exit $rc' EXIT
+trap 'rc=$?; cleanup; if $ROLLBACK_DONE; then v=rolled-back; elif (( rc == 0 )); then v=ok; else v=failed; fi; log "VERDICT: $v new=${NEW_VERSION:-${NEW_VERSION_ACTUAL:-}} pid=${NEW_PID:-${PROD_PID:-}} phase=${PHASE}"; exit $rc' EXIT
 
 # ---------- helpers ----------
 find_listener() {
@@ -682,14 +682,24 @@ fi
 # swap (skill invariant 6): an out-of-band restart silently rots them. On the
 # recovery branch (no live prod) the config is the only source — skip there.
 if [[ -n "$PROD_PID" ]]; then
-  if [[ -f "$CONFIG_FILE" ]]; then
-    CFG_BIN=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("binary",""))' "$CONFIG_FILE" 2>/dev/null || true)
-    if [[ -n "$CFG_BIN" && "$CFG_BIN" != "$PROD_BIN" ]]; then
-      log "WARN: $CONFIG_FILE describes ${CFG_BIN} but prod runs $PROD_BIN — refreshing from /proc/$PROD_PID"
+  # argv[0] is whatever string the launcher used (bare `opencode` after a
+  # PATH restart); the rollback needs an executable absolute path — prefer
+  # /proc/PID/exe, which is canonical for the live inode.
+  CANON_BIN="$(readlink "/proc/$PROD_PID/exe" 2>/dev/null | sed 's/ (deleted)$//')"
+  [[ -x "$CANON_BIN" ]] || CANON_BIN="$PROD_BIN"
+  if [[ ! ( "$CANON_BIN" == /* && -x "$CANON_BIN" ) ]]; then
+    log "WARN: live binary path '$CANON_BIN' is not an absolute executable — artifacts left as-is (rollback would fall back to \$LAST_GOOD)"
+  else
+    PROD_BIN="$CANON_BIN"   # rollback() in this run must also use the canonical path
+    if [[ -f "$CONFIG_FILE" ]]; then
+      CFG_BIN=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("binary",""))' "$CONFIG_FILE" 2>/dev/null || true)
+      if [[ -n "$CFG_BIN" && "$CFG_BIN" != "$PROD_BIN" ]]; then
+        log "WARN: $CONFIG_FILE describes ${CFG_BIN} but prod runs $PROD_BIN — refreshing from /proc/$PROD_PID"
+      fi
     fi
+    write_artifacts "$PROD_BIN" "${PROD_VERSION:-unknown}" "$PROD_FLAGS_FILE" "$PROD_ENV_FILE" "$PROD_PORT" "$PROD_CWD" "live-refresh-pid$PROD_PID"
+    log "Rollback artifacts refreshed from live prod (pid=$PROD_PID, version=${PROD_VERSION:-unknown})"
   fi
-  write_artifacts "$PROD_BIN" "${PROD_VERSION:-unknown}" "$PROD_FLAGS_FILE" "$PROD_ENV_FILE" "$PROD_PORT" "$PROD_CWD" "live-refresh-pid$PROD_PID"
-  log "Rollback artifacts refreshed from live prod (pid=$PROD_PID, version=${PROD_VERSION:-unknown})"
 fi
 
 if [[ ! -s "$PROD_FLAGS_FILE" ]]; then
