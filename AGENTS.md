@@ -3,7 +3,7 @@
 **Repo:** `/home/dev/opencode-patched/` (patches repo)
 **Source:** `/home/dev/opencode-patched/opencode-src/` (separate git clone)
 **Remotes (patches repo):** origin=aand18/opencode-patched, upstream=johnnymo87/opencode-patched.
-**Remotes (opencode-src/):** origin=anomalyco/opencode — the release-tag source (`git ls-remote --tags origin | grep -E 'refs/tags/v[0-9]+' | sort -V | tail -1`), upstream=johnnymo87/opencode, aand18=aand18/opencode.
+**Remotes (opencode-src/):** origin=anomalyco/opencode — the release-tag source (`git ls-remote --tags origin | sed 's|.*refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1`), upstream=johnnymo87/opencode, aand18=aand18/opencode.
 
 **CRITICAL:** Default bash workdir is `/home/dev/opencode-patched` (patches repo). All opencode-src git commands MUST use `workdir="/home/dev/opencode-patched/opencode-src"` to avoid accidentally resetting the wrong repo.
 
