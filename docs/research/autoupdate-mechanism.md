@@ -87,3 +87,31 @@ Windows: retain a hard link to the image so the installer can overwrite it.
 - packages/client/src/pty-handoff.ts (handoff publish/adopt/clear)
 - packages/cli/src/services/retained-image.ts (Windows hard-link retention)
 - https://opencode.ai/v2/install (curl installer)
+
+## Decision (2026-11-19): plain `serve` stays on this box
+
+The registered background service (`serve --service`, :49374) was retired after the
+v2.3.2 swap; nothing is attached to it. The local workflow keeps plain
+`opencode serve --hostname 0.0.0.0 --port 4096`, because each thing `--service` adds
+is wrong here:
+
+- **Auto-discovery via `service.json`** solves zero-config client find-a-server; the
+  openchamber client is configured with an explicit URL + `OPENCODE_PASSWORD` anyway.
+- **Loopback binding**: LAN/phone clients need the `0.0.0.0` binding plain `serve`
+  already provides.
+- **Version-mismatch auto-replacement** (client-triggered `Service.stop`+`ensure`):
+  kills attached sessions at unpredictable moments and races the deliberate,
+  rollback-armed swap (`scripts/upgrade-prod.sh`). Controlling builds is the point of
+  the fork; this mechanism removes that control.
+
+Persistence of sessions does not need `--service`: plain `serve` is the long-lived
+server and sessions survive client disconnects (and binary swaps) because :4096
+stays up.
+
+E2E proof of the respawn path before relying on it: launching `opencode serve
+--service` exactly as a client would (PATH-resolved `opencode`) bound :49374 on
+`~/.opencode/bin/opencode-v2.3.2-latest-202611191829` (verified via
+`/proc/PID/exe`), wrote registration version 2.3.2, and answered `/api/info` with
+version=2.3.2; retiring the test daemon freed the port and cleared the registration.
+The PATH chain is `~/.local/bin/opencode` → `~/.opencode/bin/opencode` → the newest
+verified binary (repointed by the swap script's step 8).
