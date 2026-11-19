@@ -7,6 +7,7 @@ set -euo pipefail
 #                          [--check-only] [--foreground] [--timeout <sec>]
 #                          [--prompt-timeout <sec>] [--prod-port <port>]
 #                          [--config-file <path>] [--last-good <path>]
+#                          [--path-symlink <path>]
 #
 # Flow: discover prod (:4096) and capture its argv/env/cwd -> verify --model
 # matches the calling session (OPENCODE_SESSION_ID) when set -> verify the new
@@ -41,6 +42,7 @@ PROMPT_TIMEOUT=60             # spec: end-to-end prompt round-trip budget
 READY_TIMEOUT=90              # a fresh serve answers 503 until its plugins activate
 CONFIG_FILE="$HOME/.opencode/last-prod-config.json"
 LAST_GOOD="$HOME/.opencode/last-good-binary"
+PATH_SYMLINK="$HOME/.opencode/bin/opencode"   # "latest" symlink repointed on verified success
 LOCK_FILE="/tmp/upgrade-prod.lock"
 LOG_LINK="/tmp/upgrade-prod.log"   # symlink to the newest per-run log
 
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --prod-port) PROD_PORT="${2:-}"; shift ;;
     --config-file) CONFIG_FILE="${2:-}"; shift ;;
     --last-good) LAST_GOOD="${2:-}"; shift ;;
+    --path-symlink) PATH_SYMLINK="${2:-}"; shift ;;
     --help|-h)
       sed -n "/^# upgrade-prod\.sh/,/^$/p" "${BASH_SOURCE[0]}" | sed '$d'
       exit 0
@@ -919,6 +922,17 @@ NEW_VERSION_ACTUAL=$("$NEW_BINARY" --version 2>/dev/null | parse_version)
 log "SUCCESS: upgraded to ${NEW_VERSION_ACTUAL:-$NEW_VERSION} (pid=$NEW_PID)"
 
 write_artifacts "$NEW_BINARY" "$NEW_VERSION_ACTUAL" "$PROD_FLAGS_FILE" "$PROD_ENV_FILE" "$PROD_PORT" "$PROD_CWD" "verified-upgrade"
+
+# Repoint the "latest" symlink (PATH-resolved by service respawns) only after
+# the upgrade verified end-to-end. Empty --path-symlink disables this.
+if [[ -n "$PATH_SYMLINK" ]]; then
+  mkdir -p "$(dirname "$PATH_SYMLINK")" 2>/dev/null || true
+  if ln -sfn "$NEW_BINARY" "$PATH_SYMLINK"; then
+    log "PATH symlink repointed: $PATH_SYMLINK -> $NEW_BINARY"
+  else
+    log "WARN: could not repoint PATH symlink $PATH_SYMLINK"
+  fi
+fi
 
 stop_process "$DEV_PID"
 DEV_PID=""
