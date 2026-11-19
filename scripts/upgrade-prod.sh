@@ -38,7 +38,8 @@ READY_TIMEOUT=90              # a fresh serve answers 503 until its plugins acti
 CONFIG_FILE="$HOME/.opencode/last-prod-config.json"
 LAST_GOOD="$HOME/.opencode/last-good-binary"
 LOCK_FILE="/tmp/upgrade-prod.lock"
-LOG_FILE="/tmp/upgrade-prod.log"
+LOG_LINK="/tmp/upgrade-prod.log"   # symlink to the newest per-run log
+LOG_FILE="${UPGRADE_RUN_LOG:-/tmp/upgrade-prod-$(date +%Y%m%d-%H%M%S).log}"
 
 DRY_RUN=false
 FOREGROUND=false
@@ -87,16 +88,17 @@ if ! [[ "$PROD_PORT" =~ ^[0-9]+$ ]]; then
 fi
 
 # ---------- logging (defined before anything can use it) ----------
-log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+log() { echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
 # ---------- detach (spec 1) ----------
 # prod is served on :4096, which is very likely the server hosting the session
 # that launched this script. Re-exec in a new session so the upgrade finishes
 # even after the caller's own process tree goes away.
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
-if [[ "${UPGRADE_DETACHED:-}" != "1" ]] && ! $DRY_RUN && ! $FOREGROUND; then
-  mkdir -p "$(dirname "$LOG_FILE")"
-  setsid env UPGRADE_DETACHED=1 bash "$SCRIPT_PATH" "${ORIG_ARGS[@]}" \
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+ln -sfn "$LOG_FILE" "$LOG_LINK" 2>/dev/null || true
+if [[ "${UPGRADE_DETACHED:-}" != "1" ]] && ! $DRY_RUN && ! $FOREGROUND && ! $CHECK_ONLY; then
+  setsid env UPGRADE_DETACHED=1 UPGRADE_RUN_LOG="$LOG_FILE" bash "$SCRIPT_PATH" "${ORIG_ARGS[@]}" \
     </dev/null >/dev/null 2>>"$LOG_FILE" &
   DETACHED_PID=$!
   echo "Detached upgrader started (pid=$DETACHED_PID). Follow progress: tail -f $LOG_FILE"
@@ -226,7 +228,7 @@ on_signal() {
 }
 
 trap on_signal INT TERM
-trap 'cleanup' EXIT
+trap 'rc=$?; if $ROLLBACK_DONE; then v=rolled-back; elif (( rc == 0 )); then v=ok; else v=failed; fi; log "VERDICT: $v new=${NEW_VERSION:-${NEW_VERSION_ACTUAL:-}} pid=${NEW_PID:-${PROD_PID:-}} phase=${PHASE}"; cleanup; exit $rc' EXIT
 
 # ---------- helpers ----------
 find_listener() {
