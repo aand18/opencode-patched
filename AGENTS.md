@@ -2,13 +2,14 @@
 
 **Repo:** `/home/dev/opencode-patched/` (patches repo)
 **Source:** `/home/dev/opencode-patched/opencode-src/` (separate git clone)
-**Remotes:** origin=aand18, upstream=johnnymo87, anomalyco=original (broken)
+**Remotes (patches repo):** origin=aand18/opencode-patched, upstream=johnnymo87/opencode-patched.
+**Remotes (opencode-src/):** origin=anomalyco/opencode — the release-tag source (`git ls-remote --tags origin | grep -E 'refs/tags/v[0-9]+' | sort -V | tail -1`), upstream=johnnymo87/opencode, aand18=aand18/opencode.
 
 **CRITICAL:** Default bash workdir is `/home/dev/opencode-patched` (patches repo). All opencode-src git commands MUST use `workdir="/home/dev/opencode-patched/opencode-src"` to avoid accidentally resetting the wrong repo.
 
-**Build (v2 — what prod runs, vanilla):** `OPENCODE_VERSION=2.1.4 OPENCODE_CHANNEL=latest bun run --cwd packages/cli build --single`
-- v2 restructure: the package is `packages/cli` (`@opencode/cli`), not `packages/opencode`; output is `packages/cli/dist/cli-linux-x64/bin/opencode` (the target name uses `cli` where v1 used `opencode`). Layout/flags verified 2026-10-05; `--single`, `--target=<t>`, `--skip-install`, `--skip-web-ui` all present at v2.1.4 (`packages/cli/script/build.ts`).
-- v2 needs bun 1.4.x — `packageManager: bun@1.4.4` at v2.1.4. Host bun 1.3.14 is too old (`packages/script` hard-fails, and build.ts spawns `bun install` itself). Pattern: `npm i --prefix /tmp/bun144 bun@1.4.4`, PATH-prepend for the install + build only.
+**Build (v2 — what prod runs, vanilla):** `OPENCODE_VERSION=<X.Y.Z> OPENCODE_CHANNEL=latest bun run --cwd packages/cli build --single` — both vars are required; the version number is never pinned here, look it up: target tag from origin (above), live prod binary via `readlink /proc/$(ss -tlnpH | grep -oP ':4096\s.*pid=\K[0-9]+' | head -1)/exe`, tree via `git -C opencode-src describe --tags`.
+- v2 restructure: the package is `packages/cli` (`@opencode/cli`), not `packages/opencode`; output is `packages/cli/dist/cli-linux-x64/bin/opencode` (the target name uses `cli` where v1 used `opencode`). Layout/flags verified 2026-10-05; `--single`, `--target=<t>`, `--skip-install`, `--skip-web-ui` present (`packages/cli/script/build.ts`).
+- v2 needs bun `^packageManager` (root `package.json`; 1.4.4 since v2.1.4) — an older host bun hard-fails `packages/script`, and build.ts spawns `bun install` itself. Host bun is 1.4.4 (since Nov 2026); if it ever falls behind, `npm i --prefix /tmp/bun144 bun@<ver>` and PATH-prepend for the install + build only.
 - Channels are `latest`/`beta`/`dev` (not `prod`). `latest` maps to the plain `opencode.db`, writes `service.json`, and defaults the service port to 0xc0de (49374) — a second instance must set `OPENCODE_DB`. Plain `serve` runs `--service=false` (no registration).
 - Server password env is `OPENCODE_PASSWORD`; `OPENCODE_SERVER_PASSWORD` is the fallback (`packages/cli/src/env.ts`).
 - Unpatched v2 builds are named `opencode-v{VERSION}-{CHANNEL}-{TIMESTAMP}` — no `patched` infix.
@@ -60,8 +61,10 @@ Full step-by-step runbook (fetch tag → apply → rebase → build → install 
 
 Swapping the **running prod binary** (:4096) without a manual restart: `scripts/upgrade-prod.sh <new-binary> --model <providerID/modelID>`.
 - Verifies before prod is touched: a dev instance on a DB copy, running with prod's captured env, must answer a real PONG round-trip on `--model`. Then health + PONG on the relaunched prod; any failure after prod stops restores the DB backup and relaunches the previous binary.
+- `--check-only` runs the cheap preflight (binary version, artifact refresh, caller-model check, prod health, model-present) and stops before the DB copy / dev instance — use it first; the full `--dry-run` costs a 4.4 GB DB copy.
+- The swap moves `:4096` only. The `:49374` `serve --service` daemon keeps the binary it started with and hosts the agent sessions attached to it; it re-registers (SIGTERM→respawn, terminating attached clients) only when a newer-version client triggers `Service.stop`+`ensure` — a human-side restart in a quiet window, never from inside a session riding it. Details: `docs/research/autoupdate-mechanism.md`. Closing the version skew promptly matters: migrations from the new build are shared through the same `opencode.db`.
 - `--model` names the model that must keep working — pass the one the calling session uses. Resolve it from `$OPENCODE_SESSION_ID` via `GET /api/session/{id}` (`model.providerID`/`model.id`) before invoking; the script verifies `--model` against it and aborts on mismatch — never reuse a remembered model.
-- Detaches itself (setsid) before it can stop :4096, because that server hosts the session running it. Run `--dry-run` first (foreground, prod untouched). Progress: `tail -f /tmp/upgrade-prod.log`.
+- Detaches itself (setsid) before it can stop :4096, because that server hosts the session running it. Run `--dry-run` first (foreground, prod untouched). Progress: the detach message names the per-run log; `/tmp/upgrade-prod.log` is a symlink to the newest one; the last line of every run is a `VERDICT:` sentinel.
 - Exercise the destructive path against a throwaway instance instead of prod: `--prod-port 4120 --config-file … --last-good …`.
 
 Roll forward to a new upstream release (v1 patch stack):
@@ -89,15 +92,15 @@ measured sizing basis (real strings + max width) in the `apply.sh` header commen
 rebase/re-derivation has a why, not a guess.
 
 **Gotchas:**
-- opencode-src is a clean tag checkout (v2.1.4 since 2026-10-25). Build patched variants in a worktree (`git worktree add ../<name> <tag>`) and keep this tree at a tag, so a patch experiment never costs the tree
+- opencode-src is kept at a pristine tag checkout (`git -C opencode-src describe --tags` says which). Build patched variants in a worktree (`git worktree add ../<name> <tag>`) and keep this tree at a tag, so a patch experiment never costs the tree
 - Patches repo shows spurious "modified" files from CRLF/autocrlf stat-cache noise — running `bun install` or writes to tracked files resets them; skip unrelated noise when staging
 
 **The live HTTP surface is v2's `/api/…`, not the v1 `/session` routes** (the v1 tree cost a wrong turn on 2026-10-24):
 - Live surface is `/api/…`: `POST /api/session` (create, `{model:{providerID,id}}`), `POST /api/session/{id}/prompt` (`{text}` — admits only), `GET /api/session/{id}/message`, `POST /api/experimental/session/{id}/wait` (blocks until the agent loop is idle — the completion signal), `GET /api/model?directory=`, `GET /api/info` (version/pid — the useful liveness probe). Legacy `POST /session` returns 405.
 - `Model.Ref` is `{id, providerID}`, not `modelID`; assistant messages carry `model` plus `content[]`.
 - A fresh `serve` binds its port before location plugins activate and answers 503 `Location plugins did not finish activating` for ~10–45 s — poll for readiness. `/global/health` and `/health` return the SPA HTML catch-all, not JSON.
-- `opencode-src` is at **v2.1.4** as of 2026-10-25 (pristine tag checkout, 0 modified). The v1 patch stack is obsolete and its working-tree state was discarded. Other tags read with `git show <tag>:<path>` — all v2 tags are fetched locally.
-- `node_modules`/`dist` in the tree are still the v1 ones; `bun install` with bun 1.4.4 is needed before a v2 build.
+- `opencode-src` is kept a pristine tag checkout (0 modified expected; the v1 patch stack is obsolete and its working-tree state was discarded). Other tags read with `git show <tag>:<path>` — all v2 tags are fetched locally. Before computing any cross-tag delta, check `git -C opencode-src rev-parse --is-shallow-repository`: a shallow clone makes `merge-base` fail and tag logs count 1 (cost six calls on 2026-11-08); fix with `git fetch --unshallow origin`.
+- After moving the tree to a new tag, `bun install` with the `packageManager` bun version is needed before a v2 build (`node_modules`/`dist` lag behind the checkout).
 
 **Patch dependency order (v1 apply.sh):** #9 after #4, #22 after #6, #19 after #16, #17 after #7, #21 last, #24 after #3 (see header for all). Legacy 24-patch stack was #11 after #10 etc.
 
