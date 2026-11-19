@@ -4,8 +4,9 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/upgrade-prod.sh <new-binary> --model <providerID/modelID> [--dry-run]
-#                          [--foreground] [--timeout <sec>] [--prompt-timeout <sec>]
-#                          [--prod-port <port>] [--config-file <path>] [--last-good <path>]
+#                          [--check-only] [--foreground] [--timeout <sec>]
+#                          [--prompt-timeout <sec>] [--prod-port <port>]
+#                          [--config-file <path>] [--last-good <path>]
 #
 # Flow: discover prod (:4096) and capture its argv/env/cwd -> verify --model
 # matches the calling session (OPENCODE_SESSION_ID) when set -> verify the new
@@ -42,6 +43,7 @@ LOG_LINK="/tmp/upgrade-prod.log"   # symlink to the newest per-run log
 LOG_FILE="${UPGRADE_RUN_LOG:-/tmp/upgrade-prod-$(date +%Y%m%d-%H%M%S).log}"
 
 DRY_RUN=false
+CHECK_ONLY=false
 FOREGROUND=false
 NEW_BINARY=""
 MODEL_ID=""
@@ -52,6 +54,7 @@ ORIG_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
+    --check-only) CHECK_ONLY=true ;;
     --foreground) FOREGROUND=true ;;
     --model) MODEL_ID="${2:-}"; shift ;;
     --timeout) GLOBAL_TIMEOUT="${2:-}"; shift ;;
@@ -429,6 +432,22 @@ def main():
         print(f"{provider_id}/{model_id}")
         return 0
 
+    if mode == "model-present":
+        provider, model, cwd = sys.argv[5], sys.argv[6], sys.argv[7]
+        ready_budget = float(sys.argv[8]) if len(sys.argv) > 8 else 90.0
+        query = "?" + urllib.parse.urlencode({"directory": cwd}) if cwd else ""
+        try:
+            models = wait_ready(api, query, ready_budget)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, RuntimeError) as err:
+            print(f"model-present: {err}")
+            return 1
+        wanted = [m for m in models if m.get("providerID") == provider and m.get("modelID", m.get("id")) == model]
+        if wanted:
+            print(f"model-present: ok ({provider}/{model})")
+            return 0
+        print(f"model-present: missing ({provider}/{model} not among {len(models)} models)")
+        return 1
+
     provider, model, text, cwd = sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
     ready_budget = float(sys.argv[9]) if len(sys.argv) > 9 else 90.0
     query = "?" + urllib.parse.urlencode({"directory": cwd}) if cwd else ""
@@ -703,6 +722,30 @@ if [[ -n "${OPENCODE_SESSION_ID:-}" && -n "$PROD_PID" && "$PROD_PORT" == "4096" 
     exit 1
   fi
   log "Caller model check passed: $SESSION_MODEL"
+fi
+
+# ---------- step 1c: check-only preflight ----------
+# Non-destructive verification: binary, artifacts, caller-model, prod health,
+# model availability — then stop. No DB copy, no dev instance (those are the
+# expensive parts; a preflight of the cheap checks must not trigger them).
+if $CHECK_ONLY; then
+  log "CHECK ONLY: preflight mode (nothing below this line touches the DB)."
+  if [[ -z "$PROD_PID" ]]; then
+    log "CHECK ONLY: no live prod on :$PROD_PORT — health and model-present probes skipped."
+  else
+    if ! CH_OUT=$(python3 "$TMP_DIR/probe.py" health "http://127.0.0.1:$PROD_PORT" "$PROD_ENV_FILE" 20 "$READY_TIMEOUT"); then
+      log "ERROR: check-only health probe failed: $CH_OUT"
+      exit 1
+    fi
+    log "CHECK ONLY health: $CH_OUT"
+    if ! MP_OUT=$(python3 "$TMP_DIR/probe.py" model-present "http://127.0.0.1:$PROD_PORT" "$PROD_ENV_FILE" 20 "$MODEL_PROVIDER" "$MODEL_NAME" "$PROD_CWD" "$READY_TIMEOUT"); then
+      log "ERROR: check-only model check failed: $MP_OUT"
+      exit 1
+    fi
+    log "CHECK ONLY model: $MP_OUT"
+  fi
+  log "CHECK ONLY: passed — binary ok, caller-model ok, prod healthy. No DB copy, no dev instance."
+  exit 0
 fi
 
 if $FOREGROUND && ! $DRY_RUN && [[ -n "$PROD_PID" ]]; then
