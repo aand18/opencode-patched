@@ -30,6 +30,9 @@ set -euo pipefail
 #   string.
 # - Secrets (the captured env, the config file) are written 0600 and the server
 #   password is never placed on a command line.
+# - The detach marker is an argv flag (env markers leak into launched servers),
+#   a run refuses to stop a prod whose process tree contains it, and launched
+#   servers inherit only the captured env (upgrader vars are filtered out).
 
 PROD_PORT=4096
 DEV_PORT=4097
@@ -40,11 +43,11 @@ CONFIG_FILE="$HOME/.opencode/last-prod-config.json"
 LAST_GOOD="$HOME/.opencode/last-good-binary"
 LOCK_FILE="/tmp/upgrade-prod.lock"
 LOG_LINK="/tmp/upgrade-prod.log"   # symlink to the newest per-run log
-LOG_FILE="${UPGRADE_RUN_LOG:-/tmp/upgrade-prod-$(date +%Y%m%d-%H%M%S).log}"
 
 DRY_RUN=false
 CHECK_ONLY=false
 FOREGROUND=false
+DETACHED_CHILD=false   # internal: set by the setsid re-exec, argv-borne
 NEW_BINARY=""
 MODEL_ID=""
 
@@ -55,6 +58,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
     --check-only) CHECK_ONLY=true ;;
+    --detached-child) DETACHED_CHILD=true ;;
     --foreground) FOREGROUND=true ;;
     --model) MODEL_ID="${2:-}"; shift ;;
     --timeout) GLOBAL_TIMEOUT="${2:-}"; shift ;;
@@ -91,6 +95,14 @@ if ! [[ "$PROD_PORT" =~ ^[0-9]+$ ]]; then
 fi
 
 # ---------- logging (defined before anything can use it) ----------
+if $DETACHED_CHILD && [[ -n "${UPGRADE_RUN_LOG:-}" ]]; then
+  # child of a detached parent: keep writing to the parent's run log
+  LOG_FILE="$UPGRADE_RUN_LOG"
+else
+  # fresh per-run log; an inherited UPGRADE_RUN_LOG must never hijack it
+  LOG_FILE="/tmp/upgrade-prod-$(date +%Y%m%d-%H%M%S).log"
+fi
+
 log() { echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
 # ---------- detach (spec 1) ----------
@@ -100,8 +112,12 @@ log() { echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 if ! $DRY_RUN && ! $CHECK_ONLY; then ln -sfn "$LOG_FILE" "$LOG_LINK"; fi
-if [[ "${UPGRADE_DETACHED:-}" != "1" ]] && ! $DRY_RUN && ! $FOREGROUND && ! $CHECK_ONLY; then
-  setsid env UPGRADE_DETACHED=1 UPGRADE_RUN_LOG="$LOG_FILE" bash "$SCRIPT_PATH" "${ORIG_ARGS[@]}" \
+if ! $DETACHED_CHILD && ! $DRY_RUN && ! $FOREGROUND && ! $CHECK_ONLY; then
+  # The re-exec marker travels as an ARGV flag, never an env var: an env
+  # marker leaked into the launched server via execve and disabled detach
+  # for every later run on that server (incident 2026-11-19).
+  setsid env -u UPGRADE_DETACHED -u UPGRADE_RUN_LOG UPGRADE_RUN_LOG="$LOG_FILE" \
+    bash "$SCRIPT_PATH" "${ORIG_ARGS[@]}" --detached-child \
     </dev/null >/dev/null 2>>"$LOG_FILE" &
   DETACHED_PID=$!
   echo "Detached upgrader started (pid=$DETACHED_PID). Follow progress: tail -f $LOG_FILE"
@@ -155,7 +171,7 @@ stop_process() {
     base="$(tr '\0' '\n' <"/proc/$pid/cmdline" | head -1)"
     base="${base##*/}"
   fi
-  for k in "${kids[@]}"; do kill -TERM "$k" 2>/dev/null || true; done
+  for k in "${kids[@]}"; do [[ "$k" == "$$" ]] && continue; kill -TERM "$k" 2>/dev/null || true; done
   kill -TERM "$pid" 2>/dev/null || true
   for i in $(seq 1 20); do
     kill -0 "$pid" 2>/dev/null || break
@@ -283,7 +299,12 @@ def read_nul(path):
 
 
 argv = sys.argv[1:]
-env = dict(os.environ)
+# Clean room: the launched server inherits ONLY the captured env plus
+# --set overrides. Merging os.environ leaked the upgrader's own UPGRADE_*
+# markers into prod's env, where they survived into every child process
+# (incident 2026-11-19: UPGRADE_DETACHED poisoned the running server).
+env = {}
+SCRIPT_OWNED = {"UPGRADE_DETACHED", "UPGRADE_RUN_LOG"}
 cwd = None
 i = 0
 while i < len(argv):
@@ -292,7 +313,9 @@ while i < len(argv):
         for entry in read_nul(argv[i + 1]):
             k, sep, v = entry.partition(b"=")
             if sep:
-                env[k.decode("utf-8", "surrogateescape")] = v.decode("utf-8", "surrogateescape")
+                key = k.decode("utf-8", "surrogateescape")
+                if key not in SCRIPT_OWNED:
+                    env[key] = v.decode("utf-8", "surrogateescape")
         i += 2
     elif arg == "--set" and i + 1 < len(argv):
         k, sep, v = argv[i + 1].encode("utf-8", "surrogateescape").partition(b"=")
@@ -631,6 +654,19 @@ chmod 600 "$PROD_ENV_FILE"
 PROD_PID=$(find_listener "$PROD_PORT")
 if [[ -n "$PROD_PID" ]]; then
   log "Found prod on :$PROD_PORT (pid=$PROD_PID)"
+  # Self-preservation: if prod is an ancestor of this script, stop_process's
+  # children sweep would signal our own tree (verified the self-kill 2026-11-19).
+  # Read-only modes never stop prod, so they are exempt.
+  if ! $DRY_RUN && ! $CHECK_ONLY; then
+  anc=$$
+  while [[ -n "$anc" && "$anc" != 0 && "$anc" != 1 ]]; do
+    if [[ "$anc" == "$PROD_PID" ]]; then
+      log "ERROR: prod (pid=$PROD_PID) is an ancestor of this script (pid=$$) — refusing to stop prod from inside its own process tree; drop --foreground so the run detaches."
+      exit 1
+    fi
+    anc=$(ps -o ppid= -p "$anc" 2>/dev/null | tr -d '[:space:]')
+  done
+  fi
   tail -z -n +2 "/proc/$PROD_PID/cmdline" >"$PROD_FLAGS_FILE"
   cp "/proc/$PROD_PID/environ" "$PROD_ENV_FILE"
   PROD_BIN="$(tr '\0' '\n' <"/proc/$PROD_PID/cmdline" | head -1)"
