@@ -520,6 +520,55 @@ launch() {
   setsid "${args[@]}" </dev/null >"${LAUNCH_LOG:-$TMP_DIR/launch.log}" 2>&1 9>&- &
 }
 
+write_artifacts() {
+  # write_artifacts <binary> <version> <flags-file> <env-file> <port> <cwd> <source>
+  # Atomic 0600 rewrite of the rollback artifacts from the given state. `source`
+  # says which producer wrote them (live-refresh-pidN | verified-upgrade).
+  local binary=$1 version=$2 flags_file=$3 env_file=$4 port=$5 cwd=$6 source=$7
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  python3 - "$CONFIG_FILE" "$binary" "$version" "$port" "$cwd" "$flags_file" "$env_file" "$source" <<'PY'
+import datetime
+import json
+import os
+import sys
+
+config_file, binary, version, port, cwd, flags_file, env_file, source = sys.argv[1:9]
+
+
+def read_nul(path):
+    with open(path, "rb") as fh:
+        return [e for e in fh.read().split(b"\0") if e]
+
+
+flags = [e.decode("utf-8", "surrogateescape") for e in read_nul(flags_file)]
+env = {}
+for entry in read_nul(env_file):
+    k, sep, v = entry.partition(b"=")
+    if sep:
+        env[k.decode("utf-8", "surrogateescape")] = v.decode("utf-8", "surrogateescape")
+
+data = {
+    "binary": binary,
+    "version": version,
+    "flags": flags,
+    "env": env,
+    "port": int(port),
+    "cwd": cwd,
+    "timestamp": datetime.datetime.now().astimezone().isoformat(),
+    "note": f"written by scripts/upgrade-prod.sh (source={source}); contains secrets",
+}
+tmp = config_file + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as fh:
+    json.dump(data, fh, indent=2)
+os.replace(tmp, config_file)
+os.chmod(config_file, 0o600)
+PY
+  log "Config written (0600, source=$source) to $CONFIG_FILE"
+  ( umask 077; echo "$binary" >"$LAST_GOOD" )
+  log "Last-good binary updated: $LAST_GOOD -> $binary"
+}
+
 build_instance_flags() {
   # Rewrite the captured serve flags for the loopback dev instance.
   local port=$1 out=() skip=0 a
@@ -607,6 +656,21 @@ PY
   fi
 fi
 
+# ---------- step 1a: refresh artifacts from live prod ----------
+# Rollback targets must describe the build running NOW, not the last verified
+# swap (skill invariant 6): an out-of-band restart silently rots them. On the
+# recovery branch (no live prod) the config is the only source — skip there.
+if [[ -n "$PROD_PID" ]]; then
+  if [[ -f "$CONFIG_FILE" ]]; then
+    CFG_BIN=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("binary",""))' "$CONFIG_FILE" 2>/dev/null || true)
+    if [[ -n "$CFG_BIN" && "$CFG_BIN" != "$PROD_BIN" ]]; then
+      log "WARN: $CONFIG_FILE describes ${CFG_BIN} but prod runs $PROD_BIN — refreshing from /proc/$PROD_PID"
+    fi
+  fi
+  write_artifacts "$PROD_BIN" "${PROD_VERSION:-unknown}" "$PROD_FLAGS_FILE" "$PROD_ENV_FILE" "$PROD_PORT" "$PROD_CWD" "live-refresh-pid$PROD_PID"
+  log "Rollback artifacts refreshed from live prod (pid=$PROD_PID, version=${PROD_VERSION:-unknown})"
+fi
+
 if [[ ! -s "$PROD_FLAGS_FILE" ]]; then
   log "WARN: no captured serve flags; defaulting to 'serve'"
   printf 'serve\0' >"$PROD_FLAGS_FILE"
@@ -661,6 +725,7 @@ backup_db() {
     exit 1
   fi
 }
+
 
 # ---------- step 2: dev instance ----------
 if [[ -n "$(find_listener "$DEV_PORT")" ]]; then
@@ -762,50 +827,7 @@ PHASE="verified"
 NEW_VERSION_ACTUAL=$("$NEW_BINARY" --version 2>/dev/null | parse_version)
 log "SUCCESS: upgraded to ${NEW_VERSION_ACTUAL:-$NEW_VERSION} (pid=$NEW_PID)"
 
-mkdir -p "$(dirname "$CONFIG_FILE")"
-python3 - "$CONFIG_FILE" "$NEW_BINARY" "$NEW_VERSION_ACTUAL" "$PROD_PORT" "$PROD_CWD" "$PROD_FLAGS_FILE" "$PROD_ENV_FILE" <<'PY'
-import datetime
-import json
-import os
-import sys
-
-config_file, binary, version, port, cwd, flags_file, env_file = sys.argv[1:8]
-
-
-def read_nul(path):
-    with open(path, "rb") as fh:
-        return [e for e in fh.read().split(b"\0") if e]
-
-
-flags = [e.decode("utf-8", "surrogateescape") for e in read_nul(flags_file)]
-env = {}
-for entry in read_nul(env_file):
-    k, sep, v = entry.partition(b"=")
-    if sep:
-        env[k.decode("utf-8", "surrogateescape")] = v.decode("utf-8", "surrogateescape")
-
-data = {
-    "binary": binary,
-    "version": version,
-    "flags": flags,
-    "env": env,
-    "port": int(port),
-    "cwd": cwd,
-    "timestamp": datetime.datetime.now().astimezone().isoformat(),
-    "note": "written by scripts/upgrade-prod.sh after a verified upgrade; contains secrets",
-}
-tmp = config_file + ".tmp"
-fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as fh:
-    json.dump(data, fh, indent=2)
-os.replace(tmp, config_file)
-os.chmod(config_file, 0o600)
-PY
-log "Config written (0600) to $CONFIG_FILE"
-
-echo "$NEW_BINARY" >"$LAST_GOOD"
-chmod 600 "$LAST_GOOD"
-log "Last-good binary updated: $LAST_GOOD -> $NEW_BINARY"
+write_artifacts "$NEW_BINARY" "$NEW_VERSION_ACTUAL" "$PROD_FLAGS_FILE" "$PROD_ENV_FILE" "$PROD_PORT" "$PROD_CWD" "verified-upgrade"
 
 stop_process "$DEV_PID"
 DEV_PID=""
